@@ -261,4 +261,3 @@ git diff --check
 - [nanoem 技术架构与 PMX 数据模型](https://nanoem.readthedocs.io/ja/latest/architecture.html)
 - [babylon-mmd：PMX、标准骨架与准标准骨架说明](https://noname0310.github.io/babylon-mmd/docs/reference/understanding-mmd-behaviour/introduction-to-pmx-and-pmd/)
 - [Blender mmd_tools 文档：Rest Position 与导出注意事项](https://github.com/powroupi/blender_mmd_tools/wiki/Documentation)
-
