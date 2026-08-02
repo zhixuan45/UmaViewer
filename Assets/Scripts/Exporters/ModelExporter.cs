@@ -99,7 +99,16 @@ public class ModelExporter
             rootBone = container.transform;
         }
         List<Renderer> renderers = new List<Renderer>(container.GetComponentsInChildren<Renderer>());
-        PMXBoneExporter.Result boneResult = PMXBoneExporter.Build(rootBone, container.transform, renderers);
+        PMXPhysicsExporter.Context physicsContext = null;
+        if (container is UmaContainerCharacter physicsCharacter)
+        {
+            physicsContext = PMXPhysicsExporter.Prepare(physicsCharacter, rootBone);
+        }
+        PMXBoneExporter.Result boneResult = PMXBoneExporter.Build(
+            rootBone,
+            container.transform,
+            renderers,
+            physicsContext != null ? physicsContext.DynamicBones : null);
 
         //Read vertices And triangles
         List<int> triangles = new List<int>();
@@ -120,8 +129,15 @@ public class ModelExporter
             AddBlendShape(chara);
         }
         model.Morphs = ReadMorph(renderers);
-        model.Rigidbodies = new MMDRigidBody[0];
-        model.Joints = new MMDJoint[0];
+        if (physicsContext != null)
+        {
+            PMXPhysicsExporter.Build(physicsContext, container.transform, boneResult, model);
+        }
+        else
+        {
+            model.Rigidbodies = new MMDRigidBody[0];
+            model.Joints = new MMDJoint[0];
+        }
 
         return model;
     }

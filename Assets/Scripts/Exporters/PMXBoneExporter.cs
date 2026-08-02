@@ -47,10 +47,20 @@ internal static class PMXBoneExporter
         "Thigh_R", "Knee_R", "Ankle_R", "Toe_R", "Eye_L", "Eye_R"
     };
 
-    internal static Result Build(Transform skeletonRoot, Transform coordinateRoot, IEnumerable<Renderer> renderers)
+    internal static Result Build(Transform skeletonRoot, Transform coordinateRoot, IEnumerable<Renderer> renderers,
+        IEnumerable<Transform> additionalBones = null)
     {
         Transform[] hierarchy = skeletonRoot.GetComponentsInChildren<Transform>(true);
         HashSet<Transform> selected = CollectReferencedBones(renderers);
+
+        // CySpring 的末端骨可能没有蒙皮权重，但 PMX 刚体仍需关联真实骨骼。
+        if (additionalBones != null)
+        {
+            foreach (Transform bone in additionalBones)
+            {
+                if (bone != null && !IsRuntimeHelper(bone.name)) selected.Add(bone);
+            }
+        }
 
         // 某些标准骨可能没有直接权重，但仍是动画和父链所必需的。
         foreach (string boneName in RequiredBoneNames)
@@ -90,6 +100,7 @@ internal static class PMXBoneExporter
             bones.Add(bone);
         }
 
+        AddBothEyesControlBone(bones, indexes, coordinateRoot);
         ReparentTongueChain(bones, indexes);
         RebuildChildLinks(bones);
         AddFootIk(bones, indexes, coordinateRoot, parentOfAll, "L");
@@ -98,6 +109,27 @@ internal static class PMXBoneExporter
         Validate(bones);
 
         return new Result { Bones = bones.ToArray(), BoneIndexes = indexes };
+    }
+
+    private static void AddBothEyesControlBone(List<Bone> bones, Dictionary<Transform, int> indexes,
+        Transform coordinateRoot)
+    {
+        Transform head = Find(indexes.Keys, "Head");
+        Transform leftEye = Find(indexes.Keys, "Eye_L");
+        Transform rightEye = Find(indexes.Keys, "Eye_R");
+        if (head == null || (leftEye == null && rightEye == null)) return;
+
+        // MMDSkin 以“両目”判定标准眼部控制链；左右眼保留标准名称并改挂该控制骨。
+        int bothEyes = AddVirtualBone(
+            bones,
+            "両目",
+            "BothEyes",
+            coordinateRoot.InverseTransformPoint(head.position),
+            indexes[head],
+            false);
+
+        if (leftEye != null) bones[indexes[leftEye]].ParentIndex = bothEyes;
+        if (rightEye != null) bones[indexes[rightEye]].ParentIndex = bothEyes;
     }
 
     private static HashSet<Transform> CollectReferencedBones(IEnumerable<Renderer> renderers)

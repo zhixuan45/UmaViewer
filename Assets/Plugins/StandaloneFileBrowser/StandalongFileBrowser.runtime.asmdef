@@ -1,0 +1,14 @@
+﻿{
+  "name": "StandaloneFileBrowser.LegacyWindows",
+  "rootNamespace": "SFB.LegacyWindows",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": ["Android"],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

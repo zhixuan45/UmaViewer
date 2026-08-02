@@ -78,10 +78,11 @@ namespace LibMMD.Writer
                 MMDReaderWriteUtil.WriteAmpVector3(writer, joint.Rotation, Mathf.Rad2Deg);
                 MMDReaderWriteUtil.WriteVector3(writer, joint.PositionLowLimit);
                 MMDReaderWriteUtil.WriteVector3(writer, joint.PositionHiLimit);
-                MMDReaderWriteUtil.WriteVector3(writer, joint.RotationLowLimit, false);
-                MMDReaderWriteUtil.WriteVector3(writer, joint.RotationHiLimit, false);
+                // PMX Joint 角限制和旋转弹簧是原始轴分量，单位为弧度，不属于空间坐标。
+                MMDReaderWriteUtil.WriteRawVector3(writer, joint.RotationLowLimit);
+                MMDReaderWriteUtil.WriteRawVector3(writer, joint.RotationHiLimit);
                 MMDReaderWriteUtil.WriteVector3(writer, joint.SpringTranslate);
-                MMDReaderWriteUtil.WriteVector3(writer, joint.SpringRotate, false);
+                MMDReaderWriteUtil.WriteRawVector3(writer, joint.SpringRotate);
             }
         }
 
@@ -93,7 +94,8 @@ namespace LibMMD.Writer
                 MMDReaderWriteUtil.WriteSizedString(writer, rigidBody.Name, pmxConfig.Encoding); // Name
                 MMDReaderWriteUtil.WriteSizedString(writer, rigidBody.NameEn, pmxConfig.Encoding); // NameEn
                 MMDReaderWriteUtil.WriteIndex(writer, rigidBody.AssociatedBoneIndex, pmxConfig.BoneIndexSize); // AssociatedBoneIndex
-                writer.Write(rigidBody.CollisionGroup); // CollisionGroup
+                // PMX 的碰撞组字段固定为 1 字节；直接写 int 会令后续刚体数据错位。
+                writer.Write((byte)rigidBody.CollisionGroup); // CollisionGroup
                 writer.Write(rigidBody.CollisionMask); // CollisionMask
                 writer.Write((byte)rigidBody.Shape); // Shape
                 MMDReaderWriteUtil.WriteRawCoordinateVector3(writer, rigidBody.Dimemsions); // Dimemsions

@@ -69,10 +69,11 @@ namespace LibMMD.Reader
                     joint.Rotation = MMDReaderWriteUtil.ReadAmpVector3(reader, Mathf.Rad2Deg);
                     joint.PositionLowLimit = MMDReaderWriteUtil.ReadVector3(reader);
                     joint.PositionHiLimit = MMDReaderWriteUtil.ReadVector3(reader);
-                    joint.RotationLowLimit = MMDReaderWriteUtil.ReadVector3(reader);
-                    joint.RotationHiLimit = MMDReaderWriteUtil.ReadVector3(reader);
+                    // PMX Joint 角限制和旋转弹簧按文件中的弧度分量原样读取。
+                    joint.RotationLowLimit = MMDReaderWriteUtil.ReadRawVector3(reader);
+                    joint.RotationHiLimit = MMDReaderWriteUtil.ReadRawVector3(reader);
                     joint.SpringTranslate = MMDReaderWriteUtil.ReadVector3(reader);
-                    joint.SpringRotate = MMDReaderWriteUtil.ReadVector3(reader);
+                    joint.SpringRotate = MMDReaderWriteUtil.ReadRawVector3(reader);
                 }
                 else
                 {
