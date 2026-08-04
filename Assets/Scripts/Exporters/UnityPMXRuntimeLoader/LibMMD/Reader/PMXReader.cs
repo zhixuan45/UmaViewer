@@ -69,10 +69,11 @@ namespace LibMMD.Reader
                     joint.Rotation = MMDReaderWriteUtil.ReadAmpVector3(reader, Mathf.Rad2Deg);
                     joint.PositionLowLimit = MMDReaderWriteUtil.ReadVector3(reader);
                     joint.PositionHiLimit = MMDReaderWriteUtil.ReadVector3(reader);
-                    joint.RotationLowLimit = MMDReaderWriteUtil.ReadVector3(reader);
-                    joint.RotationHiLimit = MMDReaderWriteUtil.ReadVector3(reader);
+                    // PMX Joint 角限制和旋转弹簧按文件中的弧度分量原样读取。
+                    joint.RotationLowLimit = MMDReaderWriteUtil.ReadRawVector3(reader);
+                    joint.RotationHiLimit = MMDReaderWriteUtil.ReadRawVector3(reader);
                     joint.SpringTranslate = MMDReaderWriteUtil.ReadVector3(reader);
-                    joint.SpringRotate = MMDReaderWriteUtil.ReadVector3(reader);
+                    joint.SpringRotate = MMDReaderWriteUtil.ReadRawVector3(reader);
                 }
                 else
                 {
@@ -363,8 +364,12 @@ namespace LibMMD.Reader
                 link.HasLimit = reader.ReadByte() != 0;
                 if (link.HasLimit)
                 {
-                    link.LoLimit = MMDReaderWriteUtil.ReadVector3(reader);
-                    link.HiLimit = MMDReaderWriteUtil.ReadVector3(reader);
+                    // PMX IK 限制是文件坐标系下的原始弧度，运行时求解器负责角度坐标转换。
+                    Vector3 first = MMDReaderWriteUtil.ReadRawVector3(reader);
+                    Vector3 second = MMDReaderWriteUtil.ReadRawVector3(reader);
+                    // 对外部异常文件保持容错，同时确保内部区间始终满足 lower <= upper。
+                    link.LoLimit = Vector3.Min(first, second);
+                    link.HiLimit = Vector3.Max(first, second);
                 }
                 bone.IkInfoVal.IkLinks[j] = link;
             }

@@ -1,14 +1,16 @@
 ﻿{
-  "name": "StandaloneFileBrowser.LegacyWindows",
-  "rootNamespace": "SFB.LegacyWindows",
-  "references": [],
+  "name": "Gallop.Legacy",
+  "rootNamespace": "Gallop",
+  "references": ["umamusume", "RootMotionsScript"],
   "includePlatforms": [],
-  "excludePlatforms": ["Android"],
+  "excludePlatforms": [],
   "allowUnsafeCode": false,
   "overrideReferences": false,
   "precompiledReferences": [],
   "autoReferenced": false,
-  "defineConstraints": [],
+  "defineConstraints": ["GALLOP_LEGACY_COMPAT_UNSUPPORTED"],
   "versionDefines": [],
   "noEngineReferences": false
 }
+
+

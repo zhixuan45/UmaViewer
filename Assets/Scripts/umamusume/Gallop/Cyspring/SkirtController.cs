@@ -72,6 +72,37 @@ namespace Gallop
             get { return _influenceMaxAngle; }
         }
 
+        // PMX 导出只读取已经解析完成的裙摆拓扑与腿部碰撞骨，不修改运行时状态。
+        public SkirtData[] SkirtDataArray
+        {
+            get { return _skirtDataArray; }
+        }
+
+        public Transform CenterBone
+        {
+            get { return _center; }
+        }
+
+        public Transform KneeLBone
+        {
+            get { return _kneeL; }
+        }
+
+        public Transform KneeRBone
+        {
+            get { return _kneeR; }
+        }
+
+        public Transform AnkleLBone
+        {
+            get { return _ankleL; }
+        }
+
+        public Transform AnkleRBone
+        {
+            get { return _ankleR; }
+        }
+
 
         private Transform CachedTransform
         {
