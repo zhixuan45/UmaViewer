@@ -18,8 +18,10 @@ internal static class PMXBoneExporter
     private static readonly Dictionary<string, string> BoneNameMapping = new Dictionary<string, string>()
     {
         { "Spine", "上半身" }, { "Chest", "上半身2" }, { "Neck", "首" }, { "Head", "頭" },
-        { "Shoulder_L", "左肩" }, { "Arm_L", "左腕" }, { "Elbow_L", "左ひじ" }, { "Wrist_L", "左手首" },
-        { "Shoulder_R", "右肩" }, { "Arm_R", "右腕" }, { "Elbow_R", "右ひじ" }, { "Wrist_R", "右手首" },
+        { "Shoulder_L", "左肩" }, { "Arm_L", "左腕" }, { "Elbow_L", "左ひじ" },
+        { "ArmRoll_L", "左手捩" }, { "Wrist_L", "左手首" },
+        { "Shoulder_R", "右肩" }, { "Arm_R", "右腕" }, { "Elbow_R", "右ひじ" },
+        { "ArmRoll_R", "右手捩" }, { "Wrist_R", "右手首" },
         { "Thumb_01_L", "左親指０" }, { "Thumb_02_L", "左親指１" }, { "Thumb_03_L", "左親指２" },
         { "Index_01_L", "左人指１" }, { "Index_02_L", "左人指２" }, { "Index_03_L", "左人指３" },
         { "Middle_01_L", "左中指１" }, { "Middle_02_L", "左中指２" }, { "Middle_03_L", "左中指３" },
@@ -41,8 +43,9 @@ internal static class PMXBoneExporter
     private static readonly string[] RequiredBoneNames =
     {
         "Hip", "Spine", "Chest", "Neck", "Head",
-        "Shoulder_L", "Arm_L", "Elbow_L", "Wrist_L",
-        "Shoulder_R", "Arm_R", "Elbow_R", "Wrist_R",
+        "Shoulder_L", "Arm_L", "Elbow_L", "ArmRoll_L", "Wrist_L",
+        "Shoulder_R", "Arm_R", "Elbow_R", "ArmRoll_R", "Wrist_R",
+        "Hand_Attach_L", "Hand_Attach_R",
         "Thigh_L", "Knee_L", "Ankle_L", "Toe_L",
         "Thigh_R", "Knee_R", "Ankle_R", "Toe_R", "Eye_L", "Eye_R"
     };
@@ -51,7 +54,7 @@ internal static class PMXBoneExporter
         IEnumerable<Transform> additionalBones = null)
     {
         Transform[] hierarchy = skeletonRoot.GetComponentsInChildren<Transform>(true);
-        HashSet<Transform> selected = CollectReferencedBones(renderers);
+        HashSet<Transform> selected = CollectReferencedBones(renderers, skeletonRoot);
 
         // CySpring 的末端骨可能没有蒙皮权重，但 PMX 刚体仍需关联真实骨骼。
         if (additionalBones != null)
@@ -100,29 +103,33 @@ internal static class PMXBoneExporter
             bones.Add(bone);
         }
 
-        AddBothEyesControlBone(bones, indexes, coordinateRoot);
+        int bothEyes = AddBothEyesControlBone(bones, indexes, coordinateRoot);
         ReparentTongueChain(bones, indexes);
         RebuildChildLinks(bones);
         AddFootIk(bones, indexes, coordinateRoot, parentOfAll, "L");
         AddFootIk(bones, indexes, coordinateRoot, parentOfAll, "R");
         RebuildChildLinks(bones);
+        AlignElbowArmRollAndWrist(bones, indexes, coordinateRoot);
+        // 必须在重建普通骨骼末端之后设置，否则挂点的显式垂直末端会被子骨关系覆盖。
+        AddHandAttachmentCompatibilityBones(bones, indexes, coordinateRoot);
+        SetBothEyesTailToNoseBridge(bones, bothEyes, indexes, coordinateRoot);
         Validate(bones);
 
         return new Result { Bones = bones.ToArray(), BoneIndexes = indexes };
     }
 
-    private static void AddBothEyesControlBone(List<Bone> bones, Dictionary<Transform, int> indexes,
+    private static int AddBothEyesControlBone(List<Bone> bones, Dictionary<Transform, int> indexes,
         Transform coordinateRoot)
     {
         Transform head = Find(indexes.Keys, "Head");
         Transform leftEye = Find(indexes.Keys, "Eye_L");
         Transform rightEye = Find(indexes.Keys, "Eye_R");
-        if (head == null || (leftEye == null && rightEye == null)) return;
+        if (head == null || (leftEye == null && rightEye == null)) return -1;
 
-        // MMDSkin 以“両目”判定标准眼部控制链；左右眼保留标准名称并改挂该控制骨。
+        // Preserve the standard both-eyes control chain while reparenting both eye bones.
         int bothEyes = AddVirtualBone(
             bones,
-            "両目",
+            "\u4e21\u76ee",
             "BothEyes",
             coordinateRoot.InverseTransformPoint(head.position),
             indexes[head],
@@ -130,19 +137,224 @@ internal static class PMXBoneExporter
 
         if (leftEye != null) bones[indexes[leftEye]].ParentIndex = bothEyes;
         if (rightEye != null) bones[indexes[rightEye]].ParentIndex = bothEyes;
+        return bothEyes;
     }
 
-    private static HashSet<Transform> CollectReferencedBones(IEnumerable<Renderer> renderers)
+    private static void SetBothEyesTailToNoseBridge(List<Bone> bones, int bothEyes,
+        Dictionary<Transform, int> indexes, Transform coordinateRoot)
     {
-        HashSet<Transform> result = new HashSet<Transform>();
+        if (bothEyes < 0) return;
+
+        Transform head = Find(indexes.Keys, "Head");
+        Transform leftEye = Find(indexes.Keys, "Eye_L");
+        Transform rightEye = Find(indexes.Keys, "Eye_R");
+        if (head == null) return;
+
+        Transform nose = FindNoseBone(head);
+        Vector3 noseBridgePosition;
+        if (nose != null)
+        {
+            // Prefer a real nose bone so the endpoint follows each character face shape.
+            noseBridgePosition = coordinateRoot.InverseTransformPoint(nose.position);
+        }
+        else if (leftEye != null && rightEye != null)
+        {
+            // Fall back to the eye midpoint instead of accidentally using the left eye as the endpoint.
+            noseBridgePosition = coordinateRoot.InverseTransformPoint((leftEye.position + rightEye.position) * 0.5f);
+        }
+        else
+        {
+            return;
+        }
+
+        Bone controlBone = bones[bothEyes];
+        controlBone.ChildBoneVal.ChildUseId = false;
+        controlBone.ChildBoneVal.Offset = noseBridgePosition - controlBone.Position;
+    }
+
+    private static Transform FindNoseBone(Transform head)
+    {
+        Transform[] descendants = head.GetComponentsInChildren<Transform>(true);
+        Transform exactMatch = descendants.FirstOrDefault(t => t.name.Equals("Nose", StringComparison.OrdinalIgnoreCase));
+        if (exactMatch != null) return exactMatch;
+
+        // Uma nose bones may include numeric suffixes; prefer the root nose bone over facial detail bones.
+        return descendants.FirstOrDefault(t =>
+            t.name.StartsWith("Nose_00", StringComparison.OrdinalIgnoreCase) ||
+            t.name.StartsWith("Nose_01", StringComparison.OrdinalIgnoreCase) ||
+            t.name.StartsWith("Nose", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void AlignElbowArmRollAndWrist(List<Bone> bones,
+        Dictionary<Transform, int> indexes, Transform coordinateRoot)
+    {
+        AlignElbowArmRollAndWrist(bones, indexes, coordinateRoot, "L");
+        AlignElbowArmRollAndWrist(bones, indexes, coordinateRoot, "R");
+    }
+
+    private static void AlignElbowArmRollAndWrist(List<Bone> bones,
+        Dictionary<Transform, int> indexes, Transform coordinateRoot, string side)
+    {
+        Transform elbow = Find(indexes.Keys, "Elbow_" + side);
+        Transform armRoll = Find(indexes.Keys, "ArmRoll_" + side);
+        Transform wrist = Find(indexes.Keys, "Wrist_" + side);
+        if (elbow == null || armRoll == null || wrist == null ||
+            !indexes.TryGetValue(elbow, out int elbowIndex) ||
+            !indexes.TryGetValue(armRoll, out int armRollIndex) ||
+            !indexes.TryGetValue(wrist, out int wristIndex)) return;
+
+        // ArmRoll 根部是正确的腕部连接坐标：肘末端、ArmRoll 根部、手首根部必须三点重合。
+        // 仅校正 PMX 输出坐标与末端指向，不改 Unity 原骨架的动画层级。
+        Vector3 connectionPosition = coordinateRoot.InverseTransformPoint(armRoll.position);
+        bones[armRollIndex].Position = connectionPosition;
+        bones[wristIndex].Position = connectionPosition;
+        bones[elbowIndex].ChildBoneVal.ChildUseId = true;
+        bones[elbowIndex].ChildBoneVal.Index = wristIndex;
+    }
+
+    private static void AddHandAttachmentCompatibilityBones(List<Bone> bones,
+        Dictionary<Transform, int> indexes, Transform coordinateRoot)
+    {
+        AddHandAttachmentCompatibilityBone(bones, indexes, coordinateRoot, "L");
+        AddHandAttachmentCompatibilityBone(bones, indexes, coordinateRoot, "R");
+    }
+
+    private static void AddHandAttachmentCompatibilityBone(List<Bone> bones,
+        Dictionary<Transform, int> indexes, Transform coordinateRoot, string side)
+    {
+        Transform handAttach = Find(indexes.Keys, "Hand_Attach_" + side);
+        if (handAttach == null || !indexes.TryGetValue(handAttach, out int handAttachIndex)) return;
+
+        Vector3 attachmentPosition = coordinateRoot.InverseTransformPoint(handAttach.position);
+        Vector3 tailOffset = CalculateHandAttachmentTailOffset(
+            indexes.Keys, handAttach, coordinateRoot, side);
+
+        // 原 Hand_Attach 的位置就是掌心根部；90 度修正只作用于骨骼末端，不能移动根部。
+        Bone attachmentBone = bones[handAttachIndex];
+        attachmentBone.Position = attachmentPosition;
+        attachmentBone.ChildBoneVal.ChildUseId = false;
+        attachmentBone.ChildBoneVal.Offset = tailOffset;
+
+        string dummyName = side == "L" ? "ダミー.L" : "ダミー.R";
+        if (bones.Any(b => b.Name.Equals(dummyName, StringComparison.OrdinalIgnoreCase))) return;
+
+        // 保留游戏内部 Hand_Attach，并补出外部手持场景按名称查找的兼容挂点。
+        // 两骨同根、同向；父子关系仍用于继承手部运动，但不再用子骨位置定义末端。
+        int dummyIndex = AddVirtualBone(
+            bones,
+            dummyName,
+            "Dummy." + side,
+            attachmentPosition,
+            handAttachIndex,
+            false);
+        bones[dummyIndex].ChildBoneVal.ChildUseId = false;
+        bones[dummyIndex].ChildBoneVal.Offset = tailOffset;
+    }
+
+    private static Vector3 CalculateHandAttachmentTailOffset(IEnumerable<Transform> transforms,
+        Transform handAttach,
+        Transform coordinateRoot, string side)
+    {
+        Transform wrist = Find(transforms, "Wrist_" + side);
+        Transform elbow = Find(transforms, "Elbow_" + side);
+        if (wrist == null || elbow == null) return Vector3.up * 0.1f;
+
+        Transform armRoll = Find(transforms, "ArmRoll_" + side);
+        // 手首导出坐标已经对齐 ArmRoll；挂点计算必须使用同一坐标源，不能继续读取旧 Wrist Transform。
+        Vector3 wristPosition = coordinateRoot.InverseTransformPoint(
+            armRoll != null ? armRoll.position : wrist.position);
+        Vector3 elbowPosition = coordinateRoot.InverseTransformPoint(elbow.position);
+        Vector3 attachmentPosition = coordinateRoot.InverseTransformPoint(handAttach.position);
+        Vector3 wristToAttachment = attachmentPosition - wristPosition;
+        if (wristToAttachment.sqrMagnitude < 0.000001f) return Vector3.up * 0.1f;
+
+        Vector3 wristBoneDirection = wristPosition - elbowPosition;
+        if (wristBoneDirection.sqrMagnitude < 0.000001f) return Vector3.up * wristToAttachment.magnitude;
+
+        // 挂点骨以掌心为根部，末端直接垂直于手首骨（Elbow -> Wrist），而不是垂直于世界坐标。
+        // 只沿模型平面旋转方向，并继续使用原 Wrist -> Hand_Attach 距离作为辅助骨长度。
+        float attachmentLength = wristToAttachment.magnitude;
+        Vector3 positiveCandidate =
+            (Quaternion.AngleAxis(90f, Vector3.forward) * wristBoneDirection).normalized * attachmentLength;
+        Vector3 negativeCandidate =
+            (Quaternion.AngleAxis(-90f, Vector3.forward) * wristBoneDirection).normalized * attachmentLength;
+
+        string[] fingerRootNames =
+        {
+            "Index_01_" + side,
+            "Middle_01_" + side,
+            "Ring_01_" + side,
+            "Pinky_01_" + side
+        };
+        List<Transform> fingerRoots = fingerRootNames
+            .Select(name => Find(transforms, name))
+            .Where(root => root != null)
+            .ToList();
+        if (fingerRoots.Count == 0)
+        {
+            // 缺少手指骨时，以原挂点相对手首的位置判断掌心侧，再选择相反方向。
+            float positiveAlignment = Vector3.Dot(positiveCandidate.normalized, wristToAttachment.normalized);
+            float negativeAlignment = Vector3.Dot(negativeCandidate.normalized, wristToAttachment.normalized);
+            return positiveAlignment <= negativeAlignment ? positiveCandidate : negativeCandidate;
+        }
+
+        Vector3 knuckleCenter = Vector3.zero;
+        foreach (Transform fingerRoot in fingerRoots)
+        {
+            knuckleCenter += coordinateRoot.InverseTransformPoint(fingerRoot.position);
+        }
+        knuckleCenter /= fingerRoots.Count;
+
+        // 手调正确结果的末端背离手指，因此选择与“掌心根部 -> 四指根中心”夹角更大的候选。
+        Vector3 attachmentToKnuckles = knuckleCenter - attachmentPosition;
+        float positiveTowardFingers = Vector3.Dot(positiveCandidate.normalized, attachmentToKnuckles.normalized);
+        float negativeTowardFingers = Vector3.Dot(negativeCandidate.normalized, attachmentToKnuckles.normalized);
+        return positiveTowardFingers <= negativeTowardFingers ? positiveCandidate : negativeCandidate;
+    }
+
+    private static HashSet<Transform> CollectReferencedBones(IEnumerable<Renderer> renderers, Transform skeletonRoot)
+    {
+        HashSet<Transform> weightedBones = new HashSet<Transform>();
         foreach (SkinnedMeshRenderer renderer in renderers.OfType<SkinnedMeshRenderer>())
         {
-            foreach (Transform bone in renderer.bones)
+            Mesh mesh = renderer.sharedMesh;
+            Transform[] rendererBones = renderer.bones;
+            if (mesh == null || rendererBones == null) continue;
+
+            // renderer.bones 还会包含脸部占位骨；只有顶点实际使用且权重大于零时才算蒙皮引用。
+            foreach (BoneWeight weight in mesh.boneWeights)
             {
-                if (bone != null && !IsRuntimeHelper(bone.name)) result.Add(bone);
+                AddWeightedBone(weightedBones, rendererBones, weight.boneIndex0, weight.weight0);
+                AddWeightedBone(weightedBones, rendererBones, weight.boneIndex1, weight.weight1);
+                AddWeightedBone(weightedBones, rendererBones, weight.boneIndex2, weight.weight2);
+                AddWeightedBone(weightedBones, rendererBones, weight.boneIndex3, weight.weight3);
             }
         }
+
+        HashSet<Transform> result = new HashSet<Transform>();
+        foreach (Transform weightedBone in weightedBones)
+        {
+            // 无直接权重的 offset/连接骨仍可能是有效父链，必须补齐到骨架根节点。
+            Transform current = weightedBone;
+            while (current != null)
+            {
+                // skeletonRoot 已映射到虚拟“センター”，不能再作为普通骨重复导出。
+                if (current == skeletonRoot) break;
+                if (!IsRuntimeHelper(current.name)) result.Add(current);
+                current = current.parent;
+            }
+        }
+
         return result;
+    }
+
+    private static void AddWeightedBone(HashSet<Transform> result, Transform[] bones, int boneIndex, float weight)
+    {
+        const float MinimumWeight = 0.000001f;
+        if (weight <= MinimumWeight || boneIndex < 0 || boneIndex >= bones.Length) return;
+
+        Transform bone = bones[boneIndex];
+        if (bone != null && !IsRuntimeHelper(bone.name)) result.Add(bone);
     }
 
     private static bool IsRuntimeHelper(string name)

@@ -273,7 +273,11 @@ internal static class PMXPhysicsExporter
             });
 
             foreach (Transform bone in bestChain.Bones)
-                if (GetSingleChainChild(bone, bestChain.Bones) != null) context.DynamicBones.Add(bone);
+            {
+                // 裙摆末端即使没有蒙皮权重，也决定上一节骨的末端指向和整条物理链的完整性。
+                // 此处的骨骼已经通过 SkirtController、CySpring 与严格线性链三重校验，可以安全保留。
+                context.DynamicBones.Add(bone);
+            }
         }
     }
 
