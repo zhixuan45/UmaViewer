@@ -806,7 +806,11 @@ public string[] NormalBodyKeywords  = new[] { "skin", "body", "bdy", "face", "he
         UmaAssetManager.UnloadAllBundle();
 
         var prop = new GameObject(Path.GetFileName(entry.Name)).AddComponent<UmaContainerProp>();
-        prop.LoadProp(entry);
+        if (!prop.LoadProp(entry))
+        {
+            Destroy(prop.gameObject);
+            return;
+        }
 
         CurrentOtherContainer = prop;
     }
