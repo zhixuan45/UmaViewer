@@ -100,7 +100,8 @@ namespace LibMMD.Writer
                 writer.Write((byte)rigidBody.Shape); // Shape
                 MMDReaderWriteUtil.WriteRawCoordinateVector3(writer, rigidBody.Dimemsions); // Dimemsions
                 MMDReaderWriteUtil.WriteVector3(writer, rigidBody.Position); // Position
-                MMDReaderWriteUtil.WriteAmpVector3(writer, rigidBody.Rotation, Mathf.Deg2Rad); // Rotation
+                // 内存中的刚体欧拉角为度；除以 Rad2Deg 后才是 PMX 规范要求的弧度。
+                MMDReaderWriteUtil.WriteAmpVector3(writer, rigidBody.Rotation, Mathf.Rad2Deg); // Rotation
                 writer.Write(rigidBody.Mass); // Mass
                 writer.Write(rigidBody.TranslateDamp); // TranslateDamp
                 writer.Write(rigidBody.RotateDamp); // RotateDamp

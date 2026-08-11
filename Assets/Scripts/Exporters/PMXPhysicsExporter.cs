@@ -38,6 +38,7 @@ internal static class PMXPhysicsExporter
     private const float SkirtVerticalTwistDegrees = 6f;
     private const float SkirtHorizontalBendDegrees = 7f;
     private const float SkirtHorizontalTwistDegrees = 4f;
+    private const float SkirtLegColliderRadiusScale = 0.8f;
 
     // 普通发束和尾巴减少摆幅，同时保留可见的延迟跟随。
     private static readonly PhysicsPreset DefaultPreset = new PhysicsPreset
@@ -611,9 +612,44 @@ internal static class PMXPhysicsExporter
         right.Normalize();
         Vector3 forward = Vector3.Cross(right, up).normalized;
         right = Vector3.Cross(up, forward).normalized;
-        Vector3 euler = Quaternion.LookRotation(forward, up).eulerAngles;
+
+        // Unity 的 Quaternion.eulerAngles 与 MMD/Bullet 的 Z-Y-X 欧拉顺序不同。
+        // 先转换完整旋转基，再提取 PMX 欧拉角，避免正面和背面裙片被横向旋转。
+        Quaternion unityRotation = Quaternion.LookRotation(forward, up);
+        Quaternion pmxRotation = new Quaternion(
+            -unityRotation.x, unityRotation.y, -unityRotation.z, unityRotation.w);
+        Vector3 pmxEuler = ExtractMmdEulerDegrees(pmxRotation);
+
+        // PMXWriter 会对 X/Z 再做坐标转换，这里转换回其内存坐标约定。
         return new Vector3(
-            NormalizeDegrees(euler.x), NormalizeDegrees(euler.y), NormalizeDegrees(euler.z));
+            NormalizeDegrees(-pmxEuler.x),
+            NormalizeDegrees(pmxEuler.y),
+            NormalizeDegrees(-pmxEuler.z));
+    }
+
+    private static Vector3 ExtractMmdEulerDegrees(Quaternion rotation)
+    {
+        Matrix4x4 matrix = Matrix4x4.Rotate(rotation);
+        float sinY = Mathf.Clamp(-matrix.m20, -1f, 1f);
+        float y = Mathf.Asin(sinY);
+        float cosY = Mathf.Cos(y);
+        float x;
+        float z;
+
+        // MMD/Bullet 按 Rz * Ry * Rx 解释 PMX 的刚体欧拉角。
+        if (Mathf.Abs(cosY) > 0.00001f)
+        {
+            x = Mathf.Atan2(matrix.m21, matrix.m22);
+            z = Mathf.Atan2(matrix.m10, matrix.m00);
+        }
+        else
+        {
+            // 万向节锁处固定 Z，保留可表示的 X/Y 合成旋转。
+            x = Mathf.Atan2(-matrix.m12, matrix.m11);
+            z = 0f;
+        }
+
+        return new Vector3(x, y, z) * Mathf.Rad2Deg;
     }
 
     private static MMDRigidBody CreateSkirtAnchorBody(SkirtColumn column,
@@ -724,8 +760,11 @@ internal static class PMXPhysicsExporter
     {
         bool checkLeft = columns.Any(column => column.IsCheckLeftLeg);
         bool checkRight = columns.Any(column => column.IsCheckRightLeg);
-        float kneeRadius = SanitizeSkirtColliderRadius(controller.KneeColliderRadius, 0.055f);
-        float ankleRadius = SanitizeSkirtColliderRadius(controller.AnkleColliderRadius, 0.045f);
+        // CySpring 的腿围参数偏向排斥计算，直接作为 PMX 胶囊半径会明显粗一圈。
+        float kneeRadius = SanitizeSkirtColliderRadius(
+            controller.KneeColliderRadius * SkirtLegColliderRadiusScale, 0.044f);
+        float ankleRadius = SanitizeSkirtColliderRadius(
+            controller.AnkleColliderRadius * SkirtLegColliderRadiusScale, 0.036f);
         if (checkLeft) AddLegColliderChain(
             "left", controller.KneeLBone, controller.AnkleLBone, kneeRadius, ankleRadius,
             coordinateRoot, boneIndexes, rigidBodies);
@@ -741,7 +780,7 @@ internal static class PMXPhysicsExporter
         if (knee == null || !boneIndexes.ContainsKey(knee)) return;
         Transform thigh = FindNearestExportedParentTransform(knee.parent, boneIndexes);
         if (thigh != null)
-            AddKinematicCapsule(side + "_thigh_skirt_collider", thigh, knee, kneeRadius * 1.08f,
+            AddKinematicCapsule(side + "_thigh_skirt_collider", thigh, knee, kneeRadius,
                 coordinateRoot, boneIndexes, rigidBodies);
         if (ankle != null && boneIndexes.ContainsKey(ankle))
             AddKinematicCapsule(side + "_shin_skirt_collider", knee, ankle,
