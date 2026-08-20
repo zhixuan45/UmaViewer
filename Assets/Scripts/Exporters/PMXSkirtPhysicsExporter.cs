@@ -390,6 +390,10 @@ internal static class PMXSkirtPhysicsExporter
     {
         float bend = SkirtVerticalBendDegrees * Mathf.Deg2Rad;
         float twist = SkirtVerticalTwistDegrees * Mathf.Deg2Rad;
+        float bendSpring = Mathf.Lerp(
+            PMXPhysicsExporter.SkirtPreset.BendSpring, PMXPhysicsExporter.SkirtPreset.BendSpring * 0.5f, depthRatio);
+        float twistSpring = Mathf.Lerp(
+            PMXPhysicsExporter.SkirtPreset.TwistSpring, PMXPhysicsExporter.SkirtPreset.TwistSpring * 0.5f, depthRatio);
         return new MMDJoint
         {
             Name = segment.Bone.name + "_skirt_vertical_joint",
@@ -402,7 +406,7 @@ internal static class PMXSkirtPhysicsExporter
             RotationLowLimit = new Vector3(-bend, -twist, -bend * 0.75f),
             RotationHiLimit = new Vector3(bend, twist, bend * 0.75f),
             SpringTranslate = Vector3.zero,
-            SpringRotate = Vector3.zero
+            SpringRotate = new Vector3(bendSpring, twistSpring, bendSpring)
         };
     }
 

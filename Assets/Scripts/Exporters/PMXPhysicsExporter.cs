@@ -500,7 +500,7 @@ internal static class PMXPhysicsExporter
             RotationLowLimit = rotationLowLimit,
             RotationHiLimit = rotationHiLimit,
             SpringTranslate = Vector3.zero,
-            SpringRotate = Vector3.zero
+            SpringRotate = new Vector3(bendSpring, twistSpring, bendSpring)
         };
     }
 
