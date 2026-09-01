@@ -10,13 +10,18 @@ using UnityEngine;
 /// </summary>
 internal static class PMXSkirtPhysicsExporter
 {
-    private const float SkirtMinimumPanelHalfWidth = 0.012f;
-    private const float SkirtMaximumPanelHalfWidth = 0.08f;
-    private const float SkirtMinimumPanelHalfThickness = 0.004f;
-    private const float SkirtMaximumPanelHalfThickness = 0.016f;
+    private const float SkirtMinimumPanelHalfWidth = 0.008f;
+    private const float SkirtMaximumPanelHalfWidth = 0.05f;
+    private const float SkirtMinimumPanelHalfThickness = 0.003f;
+    private const float SkirtMaximumPanelHalfThickness = 0.008f;
     private const float SkirtVerticalBendDegrees = 16f;
     private const float SkirtVerticalTwistDegrees = 6f;
-    private const float SkirtLegColliderRadiusScale = 0.15f;
+
+    // 腿部与骨盆碰撞体真实物理尺寸（Unity米制单位，导出PMX时除以0.08换算为PMX单位）
+    // 大腿视觉厚度（直径）约 0.65~0.75 PMX单位，对应半径约 0.35 PMX单位 = 0.028m
+    private const float DefaultPelvisColliderRadius = 0.040f; // PMX 半径 0.50，直径 1.00，贴合骨盆腰臀内部
+    private const float DefaultThighColliderRadius = 0.028f;  // PMX 半径 0.35，直径 0.70，精准贴合大腿视觉网格
+    private const float DefaultShinColliderRadius = 0.018f;   // PMX 半径 0.225，直径 0.45，精准贴合小腿
 
     // 裙摆段临时信息
     internal sealed class SkirtSegment
@@ -140,7 +145,7 @@ internal static class PMXSkirtPhysicsExporter
                     segmentsByColumn, columnIndex, rowIndex, closeRing);
                 float configuredRadius = columns[columnIndex].Chain.Radii[segment.Bone];
                 segment.HalfThickness = Mathf.Clamp(
-                    configuredRadius * 0.55f,
+                    configuredRadius * 0.25f,
                     SkirtMinimumPanelHalfThickness,
                     SkirtMaximumPanelHalfThickness);
                 segment.Rotation = CalculatePanelRotation(segment.End - segment.Start, tangent);
@@ -298,7 +303,8 @@ internal static class PMXSkirtPhysicsExporter
             sampleCount++;
         }
         if (sampleCount == 0) return SkirtMinimumPanelHalfWidth;
-        return Mathf.Clamp(spacing / sampleCount * 0.48f,
+        // 采用 0.38f 系数留出微小周向间隙，防止相邻裙片刚体互相挤压与抖动
+        return Mathf.Clamp(spacing / sampleCount * 0.38f,
             SkirtMinimumPanelHalfWidth, SkirtMaximumPanelHalfWidth);
     }
 
@@ -343,8 +349,8 @@ internal static class PMXSkirtPhysicsExporter
             NameEn = column.Chain.Root.name + "_skirt_anchor",
             AssociatedBoneIndex = boneIndex,
             CollisionGroup = PMXPhysicsExporter.SkirtCollisionGroup,
-            CollisionMask = PMXPhysicsExporter.CreateCollisionMaskExcludingGroups(
-                PMXPhysicsExporter.SkirtCollisionGroup, PMXPhysicsExporter.DynamicCollisionGroup, PMXPhysicsExporter.TailBodyCollisionGroup),
+            CollisionMask = PMXPhysicsExporter.CreateCollisionMaskOnlyCollideWith(
+                PMXPhysicsExporter.SkirtLegCollisionGroup),
             Shape = MMDRigidBody.RigidBodyShape.RigidShapeSphere,
             Dimemsions = new Vector3(radius, 0, 0),
             Position = coordinateRoot.InverseTransformPoint(column.Chain.Root.position),
@@ -367,8 +373,8 @@ internal static class PMXSkirtPhysicsExporter
             NameEn = segment.Bone.name + "_skirt_physics",
             AssociatedBoneIndex = boneIndex,
             CollisionGroup = PMXPhysicsExporter.SkirtCollisionGroup,
-            CollisionMask = PMXPhysicsExporter.CreateCollisionMaskExcludingGroups(
-                PMXPhysicsExporter.SkirtCollisionGroup, PMXPhysicsExporter.DynamicCollisionGroup, PMXPhysicsExporter.TailBodyCollisionGroup),
+            CollisionMask = PMXPhysicsExporter.CreateCollisionMaskOnlyCollideWith(
+                PMXPhysicsExporter.SkirtLegCollisionGroup),
             Shape = MMDRigidBody.RigidBodyShape.RigidShapeBox,
             Dimemsions = new Vector3(
                 segment.HalfWidth, segment.Length * 0.46f, segment.HalfThickness),
@@ -410,36 +416,114 @@ internal static class PMXSkirtPhysicsExporter
         };
     }
 
+    /// <summary>
+    /// 构建骨盆与下半身刚体以及左右腿部碰撞体，为裙摆提供完整的内部物理支撑。
+    /// </summary>
     private static void AddSkirtLegColliders(SkirtController controller,
         IEnumerable<PMXPhysicsExporter.SkirtColumn> columns, Transform coordinateRoot,
         Dictionary<Transform, int> boneIndexes, List<MMDRigidBody> rigidBodies)
     {
+        // 1. 添加骨盆/腰臀部支撑刚体（Pelvis Collider），解决裙摆在根部向内塌陷的问题
+        AddPelvisCollider(controller, coordinateRoot, boneIndexes, rigidBodies);
+
+        // 2. 添加左右腿部碰撞体，恢复真实大腿与小腿半径（匹配 0.65~0.8 PMX 视觉厚度）
         bool checkLeft = columns.Any(column => column.IsCheckLeftLeg);
         bool checkRight = columns.Any(column => column.IsCheckRightLeg);
-        float kneeRadius = SanitizeSkirtColliderRadius(
-            controller.KneeColliderRadius * SkirtLegColliderRadiusScale, 0.044f);
-        float ankleRadius = SanitizeSkirtColliderRadius(
-            controller.AnkleColliderRadius * SkirtLegColliderRadiusScale, 0.036f);
+        float thighRadius = SanitizeSkirtColliderRadius(
+            controller.KneeColliderRadius, DefaultThighColliderRadius);
+        float shinRadius = SanitizeSkirtColliderRadius(
+            controller.AnkleColliderRadius, DefaultShinColliderRadius);
+
         if (checkLeft) AddLegColliderChain(
-            "left", controller.KneeLBone, controller.AnkleLBone, kneeRadius, ankleRadius,
+            "left", controller.KneeLBone, controller.AnkleLBone, thighRadius, shinRadius,
             coordinateRoot, boneIndexes, rigidBodies);
         if (checkRight) AddLegColliderChain(
-            "right", controller.KneeRBone, controller.AnkleRBone, kneeRadius, ankleRadius,
+            "right", controller.KneeRBone, controller.AnkleRBone, thighRadius, shinRadius,
             coordinateRoot, boneIndexes, rigidBodies);
     }
 
+    /// <summary>
+    /// 为腰臀/骨盆区域创建物理碰撞体，托住裙摆上段与臀部，消除重力下拉造成的内陷。
+    /// </summary>
+    private static void AddPelvisCollider(SkirtController controller, Transform coordinateRoot,
+        Dictionary<Transform, int> boneIndexes, List<MMDRigidBody> rigidBodies)
+    {
+        // 查找骨盆/下半身关联骨骼
+        Transform pelvisBone = controller.CenterBone;
+        if (pelvisBone == null)
+        {
+            if (controller.KneeLBone != null && controller.KneeLBone.parent != null)
+                pelvisBone = controller.KneeLBone.parent.parent;
+            else if (controller.KneeRBone != null && controller.KneeRBone.parent != null)
+                pelvisBone = controller.KneeRBone.parent.parent;
+        }
+
+        Transform exportedPelvisBone = PMXPhysicsExporter.FindNearestExportedParentTransform(pelvisBone, boneIndexes);
+        if (exportedPelvisBone == null || !boneIndexes.TryGetValue(exportedPelvisBone, out int boneIndex))
+            return;
+
+        // 计算骨盆中心位置与尺寸：若有左右大腿骨则根据跨度动态确定，否则使用 Center 骨骼
+        Vector3 pelvisPositionWorld;
+        float pelvisRadius = DefaultPelvisColliderRadius;
+
+        if (controller.KneeLBone != null && controller.KneeRBone != null)
+        {
+            Transform thighL = PMXPhysicsExporter.FindNearestExportedParentTransform(controller.KneeLBone.parent, boneIndexes);
+            Transform thighR = PMXPhysicsExporter.FindNearestExportedParentTransform(controller.KneeRBone.parent, boneIndexes);
+            if (thighL != null && thighR != null)
+            {
+                Vector3 thighCenter = (thighL.position + thighR.position) * 0.5f;
+                float legSpan = Vector3.Distance(thighL.position, thighR.position);
+                pelvisPositionWorld = thighCenter + Vector3.up * (legSpan * 0.15f);
+                pelvisRadius = Mathf.Clamp(legSpan * 0.32f, 0.035f, 0.048f);
+            }
+            else
+            {
+                pelvisPositionWorld = exportedPelvisBone.position;
+            }
+        }
+        else
+        {
+            pelvisPositionWorld = exportedPelvisBone.position;
+        }
+
+        Vector3 position = coordinateRoot.InverseTransformPoint(pelvisPositionWorld);
+        Quaternion boneRot = Quaternion.Inverse(coordinateRoot.rotation) * exportedPelvisBone.rotation;
+        Vector3 rotationEuler = PMXPhysicsExporter.ConvertUnityRotationToWriterEuler(boneRot);
+
+        rigidBodies.Add(new MMDRigidBody
+        {
+            Name = "pelvis_skirt_collider",
+            NameEn = "pelvis_skirt_collider",
+            AssociatedBoneIndex = boneIndex,
+            CollisionGroup = PMXPhysicsExporter.SkirtLegCollisionGroup,
+            CollisionMask = PMXPhysicsExporter.CreateCollisionMaskOnlyCollideWith(
+                PMXPhysicsExporter.SkirtCollisionGroup),
+            Shape = MMDRigidBody.RigidBodyShape.RigidShapeSphere,
+            Dimemsions = new Vector3(pelvisRadius, 0, 0),
+            Position = position,
+            Rotation = rotationEuler,
+            Mass = 0,
+            TranslateDamp = 1,
+            RotateDamp = 1,
+            Restitution = 0,
+            Friction = 0.5f,
+            Type = MMDRigidBody.RigidBodyType.RigidTypeKinematic
+        });
+    }
+
     private static void AddLegColliderChain(string side, Transform knee, Transform ankle,
-        float kneeRadius, float ankleRadius, Transform coordinateRoot,
+        float thighRadius, float shinRadius, Transform coordinateRoot,
         Dictionary<Transform, int> boneIndexes, List<MMDRigidBody> rigidBodies)
     {
         if (knee == null || !boneIndexes.ContainsKey(knee)) return;
         Transform thigh = PMXPhysicsExporter.FindNearestExportedParentTransform(knee.parent, boneIndexes);
         if (thigh != null)
-            AddKinematicCapsule(side + "_thigh_skirt_collider", thigh, knee, kneeRadius,
+            AddKinematicCapsule(side + "_thigh_skirt_collider", thigh, knee, thighRadius,
                 coordinateRoot, boneIndexes, rigidBodies);
         if (ankle != null && boneIndexes.ContainsKey(ankle))
             AddKinematicCapsule(side + "_shin_skirt_collider", knee, ankle,
-                (kneeRadius + ankleRadius) * 0.5f, coordinateRoot, boneIndexes, rigidBodies);
+                shinRadius, coordinateRoot, boneIndexes, rigidBodies);
     }
 
     private static void AddKinematicCapsule(string name, Transform startBone, Transform endBone,
@@ -464,8 +548,8 @@ internal static class PMXSkirtPhysicsExporter
             NameEn = name,
             AssociatedBoneIndex = boneIndex,
             CollisionGroup = PMXPhysicsExporter.SkirtLegCollisionGroup,
-            CollisionMask = PMXPhysicsExporter.CreateCollisionMaskExcludingGroups(
-                PMXPhysicsExporter.SkirtLegCollisionGroup, PMXPhysicsExporter.DynamicCollisionGroup, PMXPhysicsExporter.TailBodyCollisionGroup),
+            CollisionMask = PMXPhysicsExporter.CreateCollisionMaskOnlyCollideWith(
+                PMXPhysicsExporter.SkirtCollisionGroup),
             Shape = MMDRigidBody.RigidBodyShape.RigidShapeCapsule,
             Dimemsions = new Vector3(radius, PMXPhysicsExporter.GetCapsuleCylinderLength(length, radius), 0),
             Position = (start + end) * 0.5f,
@@ -481,7 +565,7 @@ internal static class PMXSkirtPhysicsExporter
 
     private static float SanitizeSkirtColliderRadius(float radius, float fallback)
     {
-        float value = PMXPhysicsExporter.IsFinite(radius) && radius > 0f ? radius : fallback;
-        return Mathf.Clamp(value, 0.01f, 0.04f);
+        float value = PMXPhysicsExporter.IsFinite(radius) && radius > 0.01f ? radius : fallback;
+        return Mathf.Clamp(value, 0.015f, 0.045f);
     }
 }

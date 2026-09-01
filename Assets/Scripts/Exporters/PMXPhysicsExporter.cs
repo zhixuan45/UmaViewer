@@ -464,8 +464,7 @@ internal static class PMXPhysicsExporter
             NameEn = chain.Root.name + "_body_blocker",
             AssociatedBoneIndex = anchorBoneIndex,
             CollisionGroup = TailBodyCollisionGroup,
-            CollisionMask = CreateCollisionMaskExcludingGroups(
-                TailBodyCollisionGroup, SkirtCollisionGroup, SkirtLegCollisionGroup),
+            CollisionMask = CreateCollisionMaskOnlyCollideWith(DynamicCollisionGroup),
             Shape = MMDRigidBody.RigidBodyShape.RigidShapeSphere,
             Dimemsions = new Vector3(radius, 0, 0),
             Position = anchorPosition,
@@ -513,6 +512,21 @@ internal static class PMXPhysicsExporter
     {
         ushort mask = 0;
         foreach (int group in groups) mask |= (ushort)(1 << group);
+        return mask;
+    }
+
+    /// <summary>
+    /// 白名单碰撞掩码：在 PMX/MMD 中，掩码中 bit 为 1 代表非碰撞（屏蔽），bit 为 0 代表发生碰撞。
+    /// 该方法将所有组默认设为屏蔽（1），仅允许指定的 targetGroups 发生碰撞（置 0）。
+    /// </summary>
+    internal static ushort CreateCollisionMaskOnlyCollideWith(params int[] targetGroups)
+    {
+        ushort mask = 0xFFFF; // 默认屏蔽全部 16 个组
+        foreach (int group in targetGroups)
+        {
+            if (group >= 0 && group < 16)
+                mask &= (ushort)~(1 << group);
+        }
         return mask;
     }
 
