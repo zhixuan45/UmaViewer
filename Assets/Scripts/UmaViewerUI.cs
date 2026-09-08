@@ -158,6 +158,7 @@ public class UmaViewerUI : MonoBehaviour
         canvasScaler.referenceResolution = new Vector2(1280, 720);
 #endif
         StartCoroutine(ApplyGraphicsSettings());
+        InitLivePreviewUI();
     }
 
     private void OnDestroy()
@@ -853,6 +854,44 @@ public class UmaViewerUI : MonoBehaviour
         ScenePageCtrl.Initialize(pageentrys, SceneList);
     }
 
+    /// <summary>
+    /// 初始化 Live 封面图标的交互：点击可播放试听音频，并在按压时有视觉缩放反馈
+    /// </summary>
+    private void InitLivePreviewUI()
+    {
+        if (LiveSelectImage != null)
+        {
+            var btn = LiveSelectImage.GetComponent<Button>();
+            if (btn == null)
+            {
+                btn = LiveSelectImage.gameObject.AddComponent<Button>();
+            }
+            btn.onClick.RemoveAllListeners();
+            btn.onClick.AddListener(PlayCurrentLivePreview);
+            LiveSelectImage.raycastTarget = true;
+            UIPressScaleFeedback.AddTo(LiveSelectImage.gameObject);
+        }
+    }
+
+    /// <summary>
+    /// 播放当前选中 Live 的预览试听音频，播放一次后自动停止；再次点击从头重新播放
+    /// </summary>
+    public void PlayCurrentLivePreview()
+    {
+        if (currentLive != null)
+        {
+            Builder.loadLivePreviewSound(currentLive.MusicId);
+        }
+    }
+
+    /// <summary>
+    /// 停止当前正在播放的音频（供取消按钮等 UI 关闭面板事件调用）
+    /// </summary>
+    public void StopAudio()
+    {
+        AudioSettings.StopAudio();
+    }
+
     public void PlayLive()
     {
         if (currentLive == null) return;
@@ -860,6 +899,7 @@ public class UmaViewerUI : MonoBehaviour
         var selectlist = LiveSelectList.content.GetComponentsInChildren<LiveCharacterSelect>();
         if (selectlist != null)
         {
+            AudioSettings.StopAudio(); // 进入正式 Live 前停止正在播放的试听音频
             LiveTime = true;
             ModelSettings.SetEyeTrackingEnable(false);
             Builder.LoadLive(currentLive, new List<LiveCharacterSelect>(selectlist));
@@ -870,7 +910,8 @@ public class UmaViewerUI : MonoBehaviour
     void ShowLiveSelectPanel(LiveEntry entry)
     {
         LiveSelectPannel.SetActive(true);
-        Builder.loadLivePreviewSound(entry.MusicId);
+        // 打开弹窗时不自动播放试听，若先前有正在播放的音频则先停止
+        AudioSettings.StopAudio();
         for (int i = LiveSelectList.content.childCount - 1; i >= 0; i--)
         {
             Destroy(LiveSelectList.content.GetChild(i).gameObject);

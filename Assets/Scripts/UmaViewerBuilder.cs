@@ -1,4 +1,4 @@
-﻿using CriWareFormats;
+using CriWareFormats;
 using Gallop;
 using Gallop.Live;
 using NAudio.Wave;
@@ -959,6 +959,16 @@ public string[] NormalBodyKeywords  = new[] { "skin", "body", "bdy", "face", "he
                 AddAudioSource(BGclip[0]);
                 AddLiveSound(BGawb);
             }
+            else
+            {
+                // 伴奏文件存在但未解析出有效音轨
+                UmaErrorManager.ReportAudioLoadError(BGawb.Name, "伴奏音频解析失败或未包含有效音轨。");
+            }
+        }
+        else
+        {
+            // 数据库中未匹配到该伴奏资源
+            UmaErrorManager.ReportAudioLoadError(nameVar, "未在音轨数据库中找到该 Live 伴奏 (oke) 资源条目。");
         }
 
         if (needLyrics)
@@ -967,13 +977,25 @@ public string[] NormalBodyKeywords  = new[] { "skin", "body", "bdy", "face", "he
         }
     }
 
+    /// <summary>
+    /// 加载并播放 Live 预览试听音频（正常音量，播放一次后自动停止）
+    /// </summary>
+    /// <param name="songid">Live歌曲Id</param>
     public void loadLivePreviewSound(int songid)
     {
         string nameVar = $"snd_bgm_live_{songid}_preview_02";
         UmaDatabaseEntry previewAwb = Main.AbSounds.FirstOrDefault(a => a.Name.Contains(nameVar) && a.Name.EndsWith("awb"));
+        if (previewAwb == null)
+        {
+            // 兼容可能无 _02 后缀的试听音频资源
+            string fallbackVar = $"snd_bgm_live_{songid}_preview";
+            previewAwb = Main.AbSounds.FirstOrDefault(a => a.Name.Contains(fallbackVar) && a.Name.EndsWith("awb"));
+        }
+
         if (previewAwb != null)
         {
-            PlaySound(previewAwb, volume : 0.4f, loop : true);
+            // 正常音量试听，播放一次后自动停止
+            PlaySound(previewAwb, volume: 1.0f, loop: false);
         }
     }
 
@@ -1031,53 +1053,98 @@ public string[] NormalBodyKeywords  = new[] { "skin", "body", "bdy", "face", "he
     public List<UmaWaveStream> LoadAudioStreams(UmaDatabaseEntry awb)
     {
         var streams = new List<UmaWaveStream>();
+        if (awb == null) return streams;
+
         string awbPath = awb.FilePath;
-        if (!File.Exists(awbPath)) return streams;
-
-        FileStream awbFile = File.OpenRead(awbPath);
-        AwbReader awbReader = new AwbReader(awbFile);
-
-        foreach (Wave wave in awbReader.Waves)
+        if (!File.Exists(awbPath))
         {
-            var stream = new UmaWaveStream(awbReader, wave.WaveId);
-            streams.Add(stream);
+            UmaErrorManager.ReportAudioLoadError(awb.Name ?? "未知音频", $"本地音频文件不存在: {awbPath}");
+            return streams;
         }
-         
 
-       return streams;
+        try
+        {
+            FileStream awbFile = File.OpenRead(awbPath);
+            AwbReader awbReader = new AwbReader(awbFile);
+
+            foreach (Wave wave in awbReader.Waves)
+            {
+                var stream = new UmaWaveStream(awbReader, wave.WaveId);
+                streams.Add(stream);
+            }
+        }
+        catch (Exception ex)
+        {
+            UmaErrorManager.ReportAudioLoadError(awb.Name ?? awbPath, $"音频流解析异常: {ex.Message}");
+            Debug.LogError($"[UmaViewerBuilder] LoadAudioStreams failed for {awb.Name}: {ex}");
+        }
+
+        return streams;
     }
 
-    public static List<AudioClip> LoadAudio(UmaDatabaseEntry awb)
+    /// <summary>
+    /// 根据本地音频文件路径加载并解码为 Unity AudioClip 列表
+    /// </summary>
+    /// <param name="audioPath">本地音频文件路径</param>
+    /// <param name="clipNamePrefix">生成 AudioClip 的前缀名称</param>
+    public static List<AudioClip> LoadAudio(string audioPath, string clipNamePrefix = null)
     {
         List<AudioClip> clips = new List<AudioClip>();
-        string awbPath = awb.FilePath;
-        if (!File.Exists(awbPath)) return clips;
-
-        FileStream awbFile = File.OpenRead(awbPath);
-        AwbReader awbReader = new AwbReader(awbFile);
-
-        foreach (Wave wave in awbReader.Waves)
+        if (string.IsNullOrEmpty(audioPath) || !File.Exists(audioPath))
         {
-            var stream = new UmaWaveStream(awbReader, wave.WaveId);
-            var sampleProvider = stream.ToSampleProvider();
+            UmaErrorManager.ReportAudioLoadError(clipNamePrefix ?? audioPath ?? "未知音频", $"本地音频文件缺失或无法读取: {audioPath}");
+            return clips;
+        }
 
-            int channels = stream.WaveFormat.Channels;
-            int bytesPerSample = stream.WaveFormat.BitsPerSample / 8;
-            int sampleRate = stream.WaveFormat.SampleRate;
+        try
+        {
+            FileStream awbFile = File.OpenRead(audioPath);
+            AwbReader awbReader = new AwbReader(awbFile);
+            string namePrefix = string.IsNullOrEmpty(clipNamePrefix) ? Path.GetFileNameWithoutExtension(audioPath) : clipNamePrefix;
 
-            AudioClip clip = AudioClip.Create(
-                Path.GetFileNameWithoutExtension(awb.Name) + "_" + wave.WaveId.ToString(),
-                (int)(stream.Length / channels / bytesPerSample),
-                channels,
-                sampleRate,
-                true,
-                data => sampleProvider.Read(data, 0, data.Length),
-                position => stream.Position = position * channels * bytesPerSample);
+            foreach (Wave wave in awbReader.Waves)
+            {
+                var stream = new UmaWaveStream(awbReader, wave.WaveId);
+                var sampleProvider = stream.ToSampleProvider();
 
-            clips.Add(clip);
+                int channels = stream.WaveFormat.Channels;
+                int bytesPerSample = stream.WaveFormat.BitsPerSample / 8;
+                int sampleRate = stream.WaveFormat.SampleRate;
+
+                AudioClip clip = AudioClip.Create(
+                    namePrefix + "_" + wave.WaveId.ToString(),
+                    (int)(stream.Length / channels / bytesPerSample),
+                    channels,
+                    sampleRate,
+                    true,
+                    data => sampleProvider.Read(data, 0, data.Length),
+                    position => stream.Position = position * channels * bytesPerSample);
+
+                clips.Add(clip);
+            }
+        }
+        catch (Exception ex)
+        {
+            UmaErrorManager.ReportAudioLoadError(clipNamePrefix ?? audioPath, $"音频解码或读取异常: {ex.Message}");
+            Debug.LogError($"[UmaViewerBuilder] LoadAudio failed for '{clipNamePrefix ?? audioPath}': {ex}");
         }
 
         return clips;
+    }
+
+    /// <summary>
+    /// 根据 Uma 资源数据库条目加载并解码音频
+    /// </summary>
+    /// <param name="awb">数据库音频资源条目</param>
+    public static List<AudioClip> LoadAudio(UmaDatabaseEntry awb)
+    {
+        if (awb == null)
+        {
+            UmaErrorManager.ReportAudioLoadError("空音频资源", "请求加载的音频资源条目为 null。");
+            return new List<AudioClip>();
+        }
+
+        return LoadAudio(awb.FilePath, Path.GetFileNameWithoutExtension(awb.Name));
     }
 
     public List<UmaLyricsData> LoadLiveLyrics(int songid)

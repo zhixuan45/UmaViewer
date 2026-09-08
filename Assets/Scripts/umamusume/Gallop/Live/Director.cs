@@ -1,4 +1,4 @@
-﻿using Gallop.Live.Cutt;
+using Gallop.Live.Cutt;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -422,6 +422,14 @@ namespace Gallop.Live
 
 
             liveMusic = UmaViewerAudio.ApplySound(string.Format(SONG_PATH, songid), -1);
+
+            // 伴奏音轨缺失检测：当伴奏音轨未下载或列表为空时，通过全局弹窗告知用户，杜绝静默无声播放
+            if (liveMusic == null || liveMusic.sourceList == null || liveMusic.sourceList.Count == 0)
+            {
+                UmaErrorManager.ShowUIMessage(
+                    string.Format("未找到伴奏音轨（MusicId: {0}），请检查伴奏资源或网络下载。", live != null ? live.MusicId : songid),
+                    UIMessageType.Error);
+            }
         }
 
         public void Play()
@@ -744,28 +752,9 @@ namespace Gallop.Live
             AddByKey(string.Format(CUTT_PATH, live.MusicId));
             AddByKey(string.Format(LIVE_PART_PATH, live.MusicId));
 
-            if (requireStage && !string.IsNullOrEmpty(live.BackGroundId))
+            if (requireStage)
             {
-                string folderPrefix = $"3d/env/live/live{live.BackGroundId}/";
-
-                // 保留该舞台目录下全部 AssetBundle，不删 laser、light、monitor 等任何资源。
-                foreach (var kv in main.AbList)
-                {
-                    UmaDatabaseEntry entry = kv.Value;
-                    if (entry == null || !entry.IsAssetBundle)
-                        continue;
-
-                    bool keyMatches = kv.Key.StartsWith(
-                        folderPrefix,
-                        StringComparison.OrdinalIgnoreCase);
-
-                    bool nameMatches = entry.Name != null && entry.Name.StartsWith(
-                        folderPrefix,
-                        StringComparison.OrdinalIgnoreCase);
-
-                    if (keyMatches || nameMatches)
-                        result.Add(entry);
-                }
+                result.AddRange(CollectStageBundleEntries(live, requireStage));
             }
 
             return result
@@ -773,6 +762,49 @@ namespace Gallop.Live
                 .GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.First())
                 .ToList();
+        }
+
+        /// <summary>
+        /// 收集舞台所需的全部 AssetBundle 资源条目（涵盖专属预制体模型、sourceresources 下的材质贴图包、以及 common 下的公共天空与荧光棒部件）
+        /// </summary>
+        public static List<UmaDatabaseEntry> CollectStageBundleEntries(LiveEntry live, bool requireStage)
+        {
+            var result = new List<UmaDatabaseEntry>();
+            if (!requireStage || live == null || string.IsNullOrEmpty(live.BackGroundId))
+                return result;
+
+            var main = UmaViewerMain.Instance;
+            if (main == null || main.AbList == null)
+                return result;
+
+            string bgId = live.BackGroundId;
+            // 1. 舞台专属资源路径前缀（模型、预制体、控制器等）
+            string folderPrefix = $"3d/env/live/live{bgId}/";
+            // 2. 舞台专属材质/贴图资源前缀（确保 10147 等舞台天空网格材质 mtl_env_live10147_sky000~014 等全部被加载）
+            string sourcePrefix = $"sourceresources/3d/env/live/live{bgId}/";
+            // 3. 舞台公共部件前缀（如公共天空球 pfb_env_live_cmn_sky002、公共荧光棒控制器等）
+            string commonPrefix = "3d/env/live/common/";
+
+            foreach (var kv in main.AbList)
+            {
+                UmaDatabaseEntry entry = kv.Value;
+                if (entry == null || !entry.IsAssetBundle)
+                    continue;
+
+                bool keyMatches = kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
+                                  kv.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
+                                  kv.Key.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase);
+
+                bool nameMatches = entry.Name != null && (
+                    entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Name.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Name.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase));
+
+                if (keyMatches || nameMatches)
+                    result.Add(entry);
+            }
+
+            return result;
         }
 
         private void PreloadStageBundlesBeforeInstantiate(string bgId)
@@ -784,7 +816,10 @@ namespace Gallop.Live
             if (main == null || main.AbList == null)
                 return;
 
+            // 同步兜底路径同样需要匹配专属舞台、sourceresources 材质包以及 common 公共部件
             string folderPrefix = $"3d/env/live/live{bgId}/";
+            string sourcePrefix = $"sourceresources/3d/env/live/live{bgId}/";
+            string commonPrefix = "3d/env/live/common/";
             var required = new List<UmaDatabaseEntry>();
 
             foreach (var kv in main.AbList)
@@ -793,13 +828,14 @@ namespace Gallop.Live
                 if (entry == null || !entry.IsAssetBundle)
                     continue;
 
-                bool keyMatches = kv.Key.StartsWith(
-                    folderPrefix,
-                    StringComparison.OrdinalIgnoreCase);
+                bool keyMatches = kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
+                                  kv.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
+                                  kv.Key.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase);
 
-                bool nameMatches = entry.Name != null && entry.Name.StartsWith(
-                    folderPrefix,
-                    StringComparison.OrdinalIgnoreCase);
+                bool nameMatches = entry.Name != null && (
+                    entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Name.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
+                    entry.Name.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase));
 
                 if (keyMatches || nameMatches)
                     required.AddRange(UmaAssetManager.SearchAB(main, entry));

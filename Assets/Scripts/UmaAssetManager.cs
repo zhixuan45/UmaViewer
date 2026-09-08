@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -217,10 +217,8 @@ public class UmaAssetManager : MonoBehaviour
 
         if (!File.Exists(filePath))
         {
-            Debug.LogError($"{entry.Name} - {filePath} does not exist");
-            UmaViewerUI.Instance?.ShowMessage(
-                $"{entry.Name} - {filePath} does not exist",
-                UIMessageType.Error);
+            // 通过统一错误管理器报告资源文件缺失，并展示中文/英文排查建议与频控
+            UmaErrorManager.ReportMissingResource(entry, filePath);
             return false;
         }
 
@@ -254,10 +252,8 @@ public class UmaAssetManager : MonoBehaviour
             if (bundle == null)
             {
                 stream?.Dispose();
-                Debug.LogError(filePath + " exists and doesn't work");
-                UmaViewerUI.Instance?.ShowMessage(
-                    filePath + " exists and doesn't work",
-                    UIMessageType.Error);
+                // 统一报告 AssetBundle 加载为空或损坏异常
+                UmaErrorManager.ReportBundleLoadError(entry, filePath, new Exception("AssetBundle is null or corrupted."));
                 return false;
             }
 
@@ -288,7 +284,8 @@ public class UmaAssetManager : MonoBehaviour
             handle.Stream = null;
             handle.IsLoaded = false;
             handle.RefCount = 0;
-            Debug.LogException(exception);
+            // 统一报告 AssetBundle 解析与加载过程中的未捕获异常
+            UmaErrorManager.ReportBundleLoadError(entry, filePath, exception);
             return false;
         }
     }

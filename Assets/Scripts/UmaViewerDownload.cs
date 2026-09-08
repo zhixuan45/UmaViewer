@@ -59,7 +59,8 @@ public class UmaViewerDownload : MonoBehaviour
         while (!www.isDone) { }
         if (www.result != UnityWebRequest.Result.Success)
         {
-            Debug.LogError(www.error);
+            // 通过统一错误管理器报告下载失败并进行友好提示与去重
+            UmaErrorManager.ReportDownloadError(entry, www.error, baseurl);
             callback?.Invoke($"Failed to download resources : {www.error}", UIMessageType.Error);
         }
         else
@@ -98,10 +99,8 @@ public class UmaViewerDownload : MonoBehaviour
             yield return www.SendWebRequest();
             if (www.result != UnityWebRequest.Result.Success)
             {
-                if (Instance)
-                {
-                    Instance.ShowMessage($"Failed to download resources : {www.error}", UIMessageType.Error);
-                }
+                // 统一错误处理，向 UI 与控制台报告人性化指引
+                UmaErrorManager.ReportDownloadError(entry, www.error, baseurl);
             }
             else
             {
@@ -132,7 +131,8 @@ public class UmaViewerDownload : MonoBehaviour
             await Task.Run(() => { while (!www.isDone) { } });
             if (www.result != UnityWebRequest.Result.Success)
             {
-                Debug.LogError(www.error);
+                // 异步任务同样接入统一错误管理器
+                UmaErrorManager.ReportDownloadError(entry, www.error, baseurl);
             }
             else
             {

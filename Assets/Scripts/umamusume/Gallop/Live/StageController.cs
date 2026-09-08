@@ -1105,6 +1105,9 @@ namespace Gallop.Live
                     Debug.LogWarning($"[StageController] '{stage_part.name}' 实例化后有 {missingCount} 个 missing script 组件");
                 }
 
+                // 空材质防护检测：遍历生成的 Renderer，如果检测到 sharedMaterial == null 或 materials 包含 null，进行安全回退，杜绝裸露白色死模
+                ProtectRendererMaterials(instance, stage_part.name);
+
                 foreach (var child in instance.GetComponentsInChildren<Transform>(true))
                 {
                     if (!StageObjectMap.ContainsKey(child.name))
@@ -1132,6 +1135,192 @@ namespace Gallop.Live
             }
 
             AutoAttachMirrorReflectionComponents();
+        }
+
+        /// <summary>
+        /// 针对舞台部件实例下的所有渲染器进行空材质防护检测与修复，防止因缺少材质而呈现纯白死模遮蔽舞台。
+        /// </summary>
+        /// <param name="instance">已实例化的舞台部件对象</param>
+        /// <param name="partName">部件资源预制体名称</param>
+        private void ProtectRendererMaterials(GameObject instance, string partName)
+        {
+            if (instance == null)
+                return;
+
+            var renderers = instance.GetComponentsInChildren<Renderer>(true);
+            if (renderers == null || renderers.Length == 0)
+                return;
+
+            Material[] loadedMaterialsCache = null;
+
+            foreach (var r in renderers)
+            {
+                if (r == null)
+                    continue;
+
+                // 检测 sharedMaterial == null 或 sharedMaterials 包含 null
+                var sharedMats = r.sharedMaterials;
+                bool hasNull = false;
+
+                if (sharedMats == null || sharedMats.Length == 0)
+                {
+                    hasNull = true;
+                }
+                else
+                {
+                    for (int i = 0; i < sharedMats.Length; i++)
+                    {
+                        if (sharedMats[i] == null)
+                        {
+                            hasNull = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!hasNull)
+                    continue;
+
+                Debug.LogWarning($"[StageController] 舞台部件 '{partName}' 下的渲染器 '{r.name}' 存在空材质或材质丢失，正在尝试安全回退修复...");
+
+                var fixedMats = (sharedMats != null && sharedMats.Length > 0)
+                    ? (Material[])sharedMats.Clone()
+                    : new Material[1];
+
+                for (int i = 0; i < fixedMats.Length; i++)
+                {
+                    if (fixedMats[i] != null)
+                        continue;
+
+                    // 1. 尝试从当前内存中已载入的材质中查找相匹配的材质
+                    if (loadedMaterialsCache == null)
+                    {
+                        loadedMaterialsCache = Resources.FindObjectsOfTypeAll<Material>();
+                    }
+
+                    Material fallbackMat = FindMatchingLoadedMaterial(loadedMaterialsCache, r.name, partName);
+
+                    // 2. 若未找到相匹配的已载入材质，尝试从同部件中其他有效渲染器借用备用材质
+                    if (fallbackMat == null)
+                    {
+                        fallbackMat = FindSiblingFallbackMaterial(renderers);
+                    }
+
+                    // 3. 若仍未找到，则构建安全的基础无光照材质，彻底杜绝裸露白色死模
+                    if (fallbackMat == null)
+                    {
+                        fallbackMat = CreateSafeFallbackMaterial(r.name);
+                    }
+
+                    fixedMats[i] = fallbackMat;
+                }
+
+                r.sharedMaterials = fixedMats;
+                Debug.Log($"[StageController] 渲染器 '{r.name}' 材质已成功修复为安全材质: {string.Join(", ", fixedMats.Select(m => m != null ? m.name : "null"))}");
+            }
+        }
+
+        /// <summary>
+        /// 从已载入的材质列表中按渲染器名、部件名检索最匹配的备用材质
+        /// </summary>
+        private Material FindMatchingLoadedMaterial(Material[] loadedMaterials, string rendererName, string partName)
+        {
+            if (loadedMaterials == null || loadedMaterials.Length == 0)
+                return null;
+
+            string rName = (rendererName ?? "").ToLowerInvariant();
+            string pName = (partName ?? "").ToLowerInvariant();
+
+            // 1. 精确/包含渲染器名称匹配（例如 sky000、sky001 等）
+            if (!string.IsNullOrEmpty(rName))
+            {
+                for (int i = 0; i < loadedMaterials.Length; i++)
+                {
+                    var mat = loadedMaterials[i];
+                    if (mat == null || string.IsNullOrEmpty(mat.name))
+                        continue;
+
+                    string mName = mat.name.ToLowerInvariant();
+                    if (mName.Contains(rName))
+                        return mat;
+                }
+            }
+
+            // 2. 天空网格专属匹配：若当前为天空网格，优先匹配包含 sky 与 env 的材质
+            bool isSky = rName.Contains("sky") || pName.Contains("sky");
+            if (isSky)
+            {
+                for (int i = 0; i < loadedMaterials.Length; i++)
+                {
+                    var mat = loadedMaterials[i];
+                    if (mat == null || string.IsNullOrEmpty(mat.name))
+                        continue;
+
+                    string mName = mat.name.ToLowerInvariant();
+                    if (mName.Contains("sky") && mName.Contains("env"))
+                        return mat;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 从同一部件中的其他有效渲染器中获取可用的备用材质
+        /// </summary>
+        private Material FindSiblingFallbackMaterial(Renderer[] siblings)
+        {
+            if (siblings == null)
+                return null;
+
+            for (int i = 0; i < siblings.Length; i++)
+            {
+                var sib = siblings[i];
+                if (sib == null)
+                    continue;
+
+                var mats = sib.sharedMaterials;
+                if (mats == null)
+                    continue;
+
+                for (int j = 0; j < mats.Length; j++)
+                {
+                    if (mats[j] != null)
+                        return mats[j];
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 创建安全的基础无光照材质，杜绝裸露白色死模遮蔽舞台背景
+        /// </summary>
+        private Material CreateSafeFallbackMaterial(string rendererName)
+        {
+            Shader safeShader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (safeShader == null) safeShader = Shader.Find("Unlit/Color");
+            if (safeShader == null) safeShader = Shader.Find("Unlit/Texture");
+            if (safeShader == null) safeShader = Shader.Find("Sprites/Default");
+            if (safeShader == null) safeShader = Shader.Find("Hidden/InternalErrorShader");
+
+            Material mat = (safeShader != null) ? new Material(safeShader) : new Material(Shader.Find("Standard"));
+            mat.name = $"Fallback_SafeUnlit_{rendererName ?? "unknown"}";
+
+            bool isSky = (rendererName != null && rendererName.IndexOf("sky", StringComparison.OrdinalIgnoreCase) >= 0);
+            // 天空网格使用深暗背景色，避免纯白巨球遮天蔽日；其他部件使用暗灰色
+            Color fallbackColor = isSky ? new Color(0.04f, 0.05f, 0.08f, 1f) : new Color(0.2f, 0.2f, 0.2f, 1f);
+
+            if (mat.HasProperty("_BaseColor"))
+            {
+                mat.SetColor("_BaseColor", fallbackColor);
+            }
+            else if (mat.HasProperty("_Color"))
+            {
+                mat.SetColor("_Color", fallbackColor);
+            }
+
+            return mat;
         }
 
         public void UpdateObject(ref ObjectUpdateInfo updateInfo)

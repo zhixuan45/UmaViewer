@@ -33,6 +33,8 @@ public class UmaViewerMain : MonoBehaviour
     private void Awake()
     {
         Instance = this;
+        // 初始化统一错误管理器的主线程上下文
+        UmaErrorManager.InitializeOnMainThread();
         new Config();
         ApplyFrameRateLimit();
 
