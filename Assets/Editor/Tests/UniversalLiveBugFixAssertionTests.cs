@@ -20,17 +20,14 @@ public static class UniversalLiveBugFixAssertionTests
     private static readonly string LogFilePath = @"C:\Users\JuziD\.gemini\antigravity\brain\bfbceab6-21ba-4d33-b8ab-fa39182ba6dd\scratch\universal_assertion_test_report.txt";
 
     [MenuItem("UmaViewer/Run Universal BugFix Assertion Tests")]
-    [InitializeOnLoadMethod]
-    private static void AutoRunOnCompile()
-    {
-        EditorApplication.delayCall += () =>
-        {
-            RunAllTests();
-        };
-    }
-
     public static bool RunAllTests()
     {
+        if (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isPlaying)
+        {
+            Debug.LogWarning("[UniversalLiveBugFixAssertionTests] Unity 当前处于播放模式或正在切换播放状态，已安全跳过断言测试以保护运行场景。");
+            return false;
+        }
+
         var sb = new StringBuilder();
         sb.AppendLine("================================================================");
         sb.AppendLine("=== Universal LiveBugFix Assertion Tests Execution Report ======");
@@ -171,6 +168,7 @@ public static class UniversalLiveBugFixAssertionTests
     /// </summary>
     private static void TestStageParentMapHierarchyPreservation()
     {
+        var prevStage = Director.instance ? Director.instance._stageController : null;
         var stageRoot = new GameObject("Test_Stage_Root");
         var stageController = stageRoot.AddComponent<StageController>();
 
@@ -208,6 +206,7 @@ public static class UniversalLiveBugFixAssertionTests
         finally
         {
             UnityEngine.Object.DestroyImmediate(stageRoot);
+            if (Director.instance) Director.instance._stageController = prevStage;
         }
     }
 
@@ -216,6 +215,7 @@ public static class UniversalLiveBugFixAssertionTests
     /// </summary>
     private static void TestStageObjectRenderEnableAndMonitorDefense()
     {
+        var prevStage = Director.instance ? Director.instance._stageController : null;
         var stageRoot = new GameObject("Test_Stage_Root");
         var stageController = stageRoot.AddComponent<StageController>();
 
@@ -255,6 +255,7 @@ public static class UniversalLiveBugFixAssertionTests
         finally
         {
             UnityEngine.Object.DestroyImmediate(stageRoot);
+            if (Director.instance) Director.instance._stageController = prevStage;
         }
     }
 
@@ -275,6 +276,7 @@ public static class UniversalLiveBugFixAssertionTests
             BackGroundId = "10147"
         };
 
+        var prevMain = UmaViewerMain.Instance;
         GameObject dummyMainObj = null;
         try
         {
@@ -302,6 +304,7 @@ public static class UniversalLiveBugFixAssertionTests
         finally
         {
             if (dummyMainObj != null) UnityEngine.Object.DestroyImmediate(dummyMainObj);
+            UmaViewerMain.Instance = prevMain;
         }
     }
 
@@ -322,6 +325,7 @@ public static class UniversalLiveBugFixAssertionTests
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             AssertNotNull(method, "StageController 必须包含 ProtectRendererMaterials 方法");
 
+            var prevStage = Director.instance ? Director.instance._stageController : null;
             var stageGo = new GameObject("StageHost");
             var stage = stageGo.AddComponent<StageController>();
 
@@ -337,6 +341,7 @@ public static class UniversalLiveBugFixAssertionTests
             finally
             {
                 UnityEngine.Object.DestroyImmediate(stageGo);
+                if (Director.instance) Director.instance._stageController = prevStage;
             }
         }
         finally
@@ -356,6 +361,7 @@ public static class UniversalLiveBugFixAssertionTests
         var badMat = new Material(Shader.Find("Hidden/InternalErrorShader") ?? Shader.Find("Standard"));
         renderer.sharedMaterial = badMat;
 
+        var prevStage = Director.instance ? Director.instance._stageController : null;
         var stageGo = new GameObject("StageHost");
         var stage = stageGo.AddComponent<StageController>();
 
@@ -387,6 +393,7 @@ public static class UniversalLiveBugFixAssertionTests
         {
             UnityEngine.Object.DestroyImmediate(stageGo);
             UnityEngine.Object.DestroyImmediate(dummyGo);
+            if (Director.instance) Director.instance._stageController = prevStage;
         }
     }
 
@@ -395,6 +402,7 @@ public static class UniversalLiveBugFixAssertionTests
     /// </summary>
     private static void TestBgColorFallbackExcludesSkyAndGrass()
     {
+        var prevStage = Director.instance ? Director.instance._stageController : null;
         var stageGo = new GameObject("StageHost");
         var stage = stageGo.AddComponent<StageController>();
 
@@ -445,6 +453,7 @@ public static class UniversalLiveBugFixAssertionTests
         finally
         {
             UnityEngine.Object.DestroyImmediate(stageGo);
+            if (Director.instance) Director.instance._stageController = prevStage;
         }
     }
 
@@ -453,6 +462,7 @@ public static class UniversalLiveBugFixAssertionTests
     /// </summary>
     private static void TestDirectorCollectsCommonSkyAndCloudMaterials()
     {
+        var prevMain = UmaViewerMain.Instance;
         var dummyMainObj = new GameObject("UmaViewerMain_CommonMatTest");
         var main = dummyMainObj.AddComponent<UmaViewerMain>();
 
@@ -484,6 +494,7 @@ public static class UniversalLiveBugFixAssertionTests
         finally
         {
             if (dummyMainObj != null) UnityEngine.Object.DestroyImmediate(dummyMainObj);
+            UmaViewerMain.Instance = prevMain;
         }
     }
 }
