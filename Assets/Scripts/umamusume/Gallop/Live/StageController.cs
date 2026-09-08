@@ -1110,6 +1110,12 @@ namespace Gallop.Live
 
                 foreach (var child in instance.GetComponentsInChildren<Transform>(true))
                 {
+                    var tmp_name = child.name.Replace("(Clone)", "");
+
+                    // 完整记录每个子物件的初始父节点，杜绝后续更新或归位时脱离舞台层级
+                    StageParentMap[child.name] = child.parent;
+                    StageParentMap[tmp_name] = child.parent;
+
                     if (!StageObjectMap.ContainsKey(child.name))
                     {
                         if (child.name.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -1117,8 +1123,11 @@ namespace Gallop.Live
                             child.gameObject.SetActive(true);
                         }
 
-                        var tmp_name = child.name.Replace("(Clone)", "");
                         StageObjectMap[tmp_name] = child.gameObject;
+                        if (!StageObjectMap.ContainsKey(child.name))
+                        {
+                            StageObjectMap[child.name] = child.gameObject;
+                        }
                     }
                 }
             }
@@ -1158,30 +1167,32 @@ namespace Gallop.Live
                 if (r == null)
                     continue;
 
-                // 检测 sharedMaterial == null 或 sharedMaterials 包含 null
+                // 检测 sharedMaterial == null、sharedMaterials 包含 null，或者材质的 Shader 损坏
                 var sharedMats = r.sharedMaterials;
-                bool hasNull = false;
+                bool hasInvalid = false;
 
                 if (sharedMats == null || sharedMats.Length == 0)
                 {
-                    hasNull = true;
+                    hasInvalid = true;
                 }
                 else
                 {
                     for (int i = 0; i < sharedMats.Length; i++)
                     {
-                        if (sharedMats[i] == null)
+                        var mat = sharedMats[i];
+                        if (mat == null || mat.shader == null || !mat.shader.isSupported || mat.shader.name == "Hidden/InternalErrorShader")
                         {
-                            hasNull = true;
+                            hasInvalid = true;
                             break;
                         }
                     }
                 }
 
-                if (!hasNull)
+                // 若材质正常存在且着色器完整，绝不强行覆盖修改其原有材质或底色
+                if (!hasInvalid)
                     continue;
 
-                Debug.LogWarning($"[StageController] 舞台部件 '{partName}' 下的渲染器 '{r.name}' 存在空材质或材质丢失，正在尝试安全回退修复...");
+                Debug.LogWarning($"[StageController] 舞台部件 '{partName}' 下的渲染器 '{r.name}' 存在空材质或着色器损坏，正在尝试安全回退修复...");
 
                 var fixedMats = (sharedMats != null && sharedMats.Length > 0)
                     ? (Material[])sharedMats.Clone()
@@ -1189,7 +1200,9 @@ namespace Gallop.Live
 
                 for (int i = 0; i < fixedMats.Length; i++)
                 {
-                    if (fixedMats[i] != null)
+                    var mat = fixedMats[i];
+                    bool isCurrentInvalid = mat == null || mat.shader == null || !mat.shader.isSupported || mat.shader.name == "Hidden/InternalErrorShader";
+                    if (!isCurrentInvalid)
                         continue;
 
                     // 1. 尝试从当前内存中已载入的材质中查找相匹配的材质
@@ -1206,7 +1219,7 @@ namespace Gallop.Live
                         fallbackMat = FindSiblingFallbackMaterial(renderers);
                     }
 
-                    // 3. 若仍未找到，则构建安全的基础无光照材质，彻底杜绝裸露白色死模
+                    // 3. 若仍未找到，仅在材质缺失或着色器损坏时构建温和的基础无光照材质兜底
                     if (fallbackMat == null)
                     {
                         fallbackMat = CreateSafeFallbackMaterial(r.name);
@@ -1294,7 +1307,8 @@ namespace Gallop.Live
         }
 
         /// <summary>
-        /// 创建安全的基础无光照材质，杜绝裸露白色死模遮蔽舞台背景
+        /// 创建温和的基础无光照材质兜底。移除将天空网格强行刷为深死黑的逻辑，采用自然柔和的浅白/浅灰，
+        /// 确保材质缺失或着色器损坏时能够接受时间轴 BgColor 染色与光模糊（Bloom）后处理的晕染。
         /// </summary>
         private Material CreateSafeFallbackMaterial(string rendererName)
         {
@@ -1307,9 +1321,9 @@ namespace Gallop.Live
             Material mat = (safeShader != null) ? new Material(safeShader) : new Material(Shader.Find("Standard"));
             mat.name = $"Fallback_SafeUnlit_{rendererName ?? "unknown"}";
 
-            bool isSky = (rendererName != null && rendererName.IndexOf("sky", StringComparison.OrdinalIgnoreCase) >= 0);
-            // 天空网格使用深暗背景色，避免纯白巨球遮天蔽日；其他部件使用暗灰色
-            Color fallbackColor = isSky ? new Color(0.04f, 0.05f, 0.08f, 1f) : new Color(0.2f, 0.2f, 0.2f, 1f);
+            // 移除将天空网格强行刷为深死黑 Color(0.04f, 0.05f, 0.08f, 1f) 的生硬逻辑；
+            // 采用自然柔和的浅白/浅灰色作为底色，允许时间轴的 BgColor 颜色乘法与 Bloom 辉光正常呈现
+            Color fallbackColor = new Color(0.9f, 0.9f, 0.9f, 1f);
 
             if (mat.HasProperty("_BaseColor"))
             {
@@ -1328,28 +1342,68 @@ namespace Gallop.Live
             if (updateInfo.data == null || string.IsNullOrEmpty(updateInfo.data.name))
                 return;
 
-            if (StageObjectMap.TryGetValue(updateInfo.data.name, out GameObject gameObject) && gameObject != null)
+            // 优先根据原始名称查找对应物件，若未命中则剔除 (Clone) 后缀进行兜底查找
+            GameObject gameObject = null;
+            if (!StageObjectMap.TryGetValue(updateInfo.data.name, out gameObject) || gameObject == null)
             {
+                string cleanName = updateInfo.data.name.Replace("(Clone)", "");
+                StageObjectMap.TryGetValue(cleanName, out gameObject);
+            }
+
+            if (gameObject != null)
+            {
+                // 严格依照 updateInfo.renderEnable 设置显隐状态（包括开场 renderEnable=0 时及时隐藏 monitor_000 等物件）
                 gameObject.SetActive(updateInfo.renderEnable);
 
-                Transform attach_transform = null;
+                // 目标父节点默认严格保留其现有的 gameObject.transform.parent，绝不调用 SetParent(null)
+                Transform targetParent = gameObject.transform.parent;
+
                 switch (updateInfo.AttachTarget)
                 {
                     case AttachType.None:
-                        if (StageParentMap.TryGetValue(updateInfo.data.name, out Transform parentTransform))
-                            attach_transform = parentTransform;
+                        // 当 AttachTarget 为 None 时：如果 StageParentMap 找到了 parentTransform，则将物体挂回 parentTransform；
+                        // 如果字典中未找到，严格保留其现有的 gameObject.transform.parent，绝不能调用 SetParent(null)！杜绝物体脱离舞台被孤立在世界根节点
+                        if (StageParentMap.TryGetValue(updateInfo.data.name, out Transform parentTransform) && parentTransform != null)
+                        {
+                            targetParent = parentTransform;
+                        }
+                        else
+                        {
+                            string cleanName = updateInfo.data.name.Replace("(Clone)", "");
+                            if (StageParentMap.TryGetValue(cleanName, out Transform cleanParent) && cleanParent != null)
+                            {
+                                targetParent = cleanParent;
+                            }
+                        }
                         break;
+
                     case AttachType.Character:
-                        var chara = Director.instance.CharaContainerScript[updateInfo.CharacterPosition];
-                        if (chara)
-                            attach_transform = chara.transform;
+                        // 挂载至指定位置马娘角色的 Transform
+                        if (Director.instance != null && Director.instance.CharaContainerScript != null &&
+                            updateInfo.CharacterPosition >= 0 && updateInfo.CharacterPosition < Director.instance.CharaContainerScript.Count)
+                        {
+                            var chara = Director.instance.CharaContainerScript[updateInfo.CharacterPosition];
+                            if (chara != null)
+                            {
+                                targetParent = chara.transform;
+                            }
+                        }
                         break;
+
                     case AttachType.Camera:
-                        attach_transform = Director.instance.MainCameraTransform;
+                        // 挂载至主摄像机 Transform
+                        if (Director.instance != null && Director.instance.MainCameraTransform != null)
+                        {
+                            targetParent = Director.instance.MainCameraTransform;
+                        }
                         break;
                 }
-                if (gameObject.transform.parent != attach_transform)
-                    gameObject.transform.SetParent(attach_transform);
+
+                // 仅当目标父节点有效且与当前父节点不同时进行重新挂载，严禁调用 SetParent(null)
+                if (targetParent != null && gameObject.transform.parent != targetParent)
+                {
+                    gameObject.transform.SetParent(targetParent);
+                }
 
                 if (updateInfo.data.enablePosition)
                     gameObject.transform.localPosition = updateInfo.updateData.position;

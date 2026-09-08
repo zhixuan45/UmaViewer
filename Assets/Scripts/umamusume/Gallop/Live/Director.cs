@@ -765,12 +765,16 @@ namespace Gallop.Live
         }
 
         /// <summary>
-        /// 收集舞台所需的全部 AssetBundle 资源条目（涵盖专属预制体模型、sourceresources 下的材质贴图包、以及 common 下的公共天空与荧光棒部件）
+        /// 收集舞台所需的全部 AssetBundle 资源条目（涵盖专属预制体模型、sourceresources 下的材质贴图包、common 公共天空/荧光棒部件，以及歌曲专属 UVMovie 视频包）
         /// </summary>
         public static List<UmaDatabaseEntry> CollectStageBundleEntries(LiveEntry live, bool requireStage)
         {
             var result = new List<UmaDatabaseEntry>();
-            if (!requireStage || live == null || string.IsNullOrEmpty(live.BackGroundId))
+            if (!requireStage || live == null)
+                return result;
+
+            // 若既没有背景舞台 ID 也没有有效歌曲 ID，则无需收集任何舞台或视频资源
+            if (string.IsNullOrEmpty(live.BackGroundId) && live.MusicId <= 0)
                 return result;
 
             var main = UmaViewerMain.Instance;
@@ -778,12 +782,16 @@ namespace Gallop.Live
                 return result;
 
             string bgId = live.BackGroundId;
+            bool hasBg = !string.IsNullOrEmpty(bgId);
+
             // 1. 舞台专属资源路径前缀（模型、预制体、控制器等）
-            string folderPrefix = $"3d/env/live/live{bgId}/";
+            string folderPrefix = hasBg ? $"3d/env/live/live{bgId}/" : null;
             // 2. 舞台专属材质/贴图资源前缀（确保 10147 等舞台天空网格材质 mtl_env_live10147_sky000~014 等全部被加载）
-            string sourcePrefix = $"sourceresources/3d/env/live/live{bgId}/";
+            string sourcePrefix = hasBg ? $"sourceresources/3d/env/live/live{bgId}/" : null;
             // 3. 舞台公共部件前缀（如公共天空球 pfb_env_live_cmn_sky002、公共荧光棒控制器等）
-            string commonPrefix = "3d/env/live/common/";
+            string commonPrefix = hasBg ? "3d/env/live/common/" : null;
+            // 4. 歌曲对应 UVMovie 视频资源前缀（如 1175 的 39 个 gal_uvmovie_1175_001 及分镜纹理包）
+            string uvMoviePrefix = live.MusicId > 0 ? $"live/uvmovie/gal_uvmovie_{live.MusicId}" : null;
 
             foreach (var kv in main.AbList)
             {
@@ -791,14 +799,17 @@ namespace Gallop.Live
                 if (entry == null || !entry.IsAssetBundle)
                     continue;
 
-                bool keyMatches = kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
-                                  kv.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
-                                  kv.Key.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase);
+                // 分别检查 key（资源相对路径）和 entry.Name 是否匹配任一舞台或 UVMovie 资源前缀
+                bool keyMatches = (folderPrefix != null && kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                                  (sourcePrefix != null && kv.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
+                                  (commonPrefix != null && kv.Key.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                                  (uvMoviePrefix != null && kv.Key.StartsWith(uvMoviePrefix, StringComparison.OrdinalIgnoreCase));
 
                 bool nameMatches = entry.Name != null && (
-                    entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
-                    entry.Name.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
-                    entry.Name.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase));
+                    (folderPrefix != null && entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                    (sourcePrefix != null && entry.Name.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
+                    (commonPrefix != null && entry.Name.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                    (uvMoviePrefix != null && entry.Name.StartsWith(uvMoviePrefix, StringComparison.OrdinalIgnoreCase)));
 
                 if (keyMatches || nameMatches)
                     result.Add(entry);
@@ -807,19 +818,29 @@ namespace Gallop.Live
             return result;
         }
 
+        /// <summary>
+        /// 在实例化舞台前同步预载舞台与 UVMovie 资源的兜底方法（用于非标准 LoadLive 入口）
+        /// </summary>
         private void PreloadStageBundlesBeforeInstantiate(string bgId)
         {
-            if (string.IsNullOrEmpty(bgId))
-                return;
-
             var main = UmaViewerMain.Instance;
             if (main == null || main.AbList == null)
                 return;
 
-            // 同步兜底路径同样需要匹配专属舞台、sourceresources 材质包以及 common 公共部件
-            string folderPrefix = $"3d/env/live/live{bgId}/";
-            string sourcePrefix = $"sourceresources/3d/env/live/live{bgId}/";
-            string commonPrefix = "3d/env/live/common/";
+            // 获取当前 Director 实例的 live 数据以提取歌曲对应的 UVMovie 前缀
+            LiveEntry currentLive = live ?? instance?.live;
+            string uvMoviePrefix = (currentLive != null && currentLive.MusicId > 0)
+                ? $"live/uvmovie/gal_uvmovie_{currentLive.MusicId}"
+                : null;
+
+            bool hasBg = !string.IsNullOrEmpty(bgId);
+            if (!hasBg && string.IsNullOrEmpty(uvMoviePrefix))
+                return;
+
+            // 同步兜底路径匹配专属舞台、sourceresources 材质包、common 公共部件以及当前歌曲的 UVMovie
+            string folderPrefix = hasBg ? $"3d/env/live/live{bgId}/" : null;
+            string sourcePrefix = hasBg ? $"sourceresources/3d/env/live/live{bgId}/" : null;
+            string commonPrefix = hasBg ? "3d/env/live/common/" : null;
             var required = new List<UmaDatabaseEntry>();
 
             foreach (var kv in main.AbList)
@@ -828,14 +849,17 @@ namespace Gallop.Live
                 if (entry == null || !entry.IsAssetBundle)
                     continue;
 
-                bool keyMatches = kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
-                                  kv.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
-                                  kv.Key.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase);
+                // 同样匹配舞台专属模型、材质包、公共部件以及当前歌曲的 UVMovie 资源
+                bool keyMatches = (folderPrefix != null && kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                                  (sourcePrefix != null && kv.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
+                                  (commonPrefix != null && kv.Key.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                                  (uvMoviePrefix != null && kv.Key.StartsWith(uvMoviePrefix, StringComparison.OrdinalIgnoreCase));
 
                 bool nameMatches = entry.Name != null && (
-                    entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase) ||
-                    entry.Name.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase) ||
-                    entry.Name.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase));
+                    (folderPrefix != null && entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                    (sourcePrefix != null && entry.Name.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
+                    (commonPrefix != null && entry.Name.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                    (uvMoviePrefix != null && entry.Name.StartsWith(uvMoviePrefix, StringComparison.OrdinalIgnoreCase)));
 
                 if (keyMatches || nameMatches)
                     required.AddRange(UmaAssetManager.SearchAB(main, entry));
@@ -853,7 +877,7 @@ namespace Gallop.Live
                     isRecursive: false);
             }
 
-            Debug.Log($"[StagePreloadFallback] bgId={bgId}, bundles={required.Count}");
+            Debug.Log($"[StagePreloadFallback] bgId={bgId}, musicId={currentLive?.MusicId}, bundles={required.Count}");
         }
         private void InitializeMirrorReflections()
         {
