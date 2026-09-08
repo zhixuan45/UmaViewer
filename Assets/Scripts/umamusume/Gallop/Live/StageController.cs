@@ -64,7 +64,7 @@ namespace Gallop.Live
 
         int _logEvery = 30;
         int _logCount = 0;
-        public List<GameObject> _stageObjects;
+        public List<GameObject> _stageObjects = new List<GameObject>();
         public StageObjectUnit[] _stageObjectUnits;
         public Dictionary<string, StageObjectUnit> StageObjectUnitMap = new Dictionary<string, StageObjectUnit>();
         public Dictionary<string, GameObject> StageObjectMap = new Dictionary<string, GameObject>();
@@ -141,8 +141,11 @@ namespace Gallop.Live
             RebuildMirrorReflectionCache();
             RebuildBgColorCache();
 
-            Debug.Log("[StageController] stage parts = " +
-                string.Join(", ", _stageObjects.ConvertAll(o => o ? o.name : "<null>")));
+            if (_stageObjects != null && _stageObjects.Count > 0)
+            {
+                Debug.Log("[StageController] stage parts = " +
+                    string.Join(", ", _stageObjects.ConvertAll(o => o ? o.name : "<null>")));
+            }
 
             if (Director.instance)
                 Director.instance._stageController = this;
@@ -1090,57 +1093,63 @@ namespace Gallop.Live
 
         public void InitializeStage()
         {
-            foreach (GameObject stage_part in _stageObjects)
+            if (_stageObjects != null)
             {
-                if (stage_part == null)
+                foreach (GameObject stage_part in _stageObjects)
                 {
-                    Debug.LogWarning("[StageController] 跳过 _stageObjects 中的 null 条目");
-                    continue;
-                }
-
-                var instance = Instantiate(stage_part, transform);
-
-                int missingCount = CountMissingScripts(instance);
-                if (missingCount > 0)
-                {
-                    Debug.LogWarning($"[StageController] '{stage_part.name}' 实例化后有 {missingCount} 个 missing script 组件");
-                }
-
-                // 空材质防护检测：遍历生成的 Renderer，如果检测到 sharedMaterial == null 或 materials 包含 null，进行安全回退，杜绝裸露白色死模
-                ProtectRendererMaterials(instance, stage_part.name);
-
-                foreach (var child in instance.GetComponentsInChildren<Transform>(true))
-                {
-                    var tmp_name = child.name.Replace("(Clone)", "");
-
-                    // 完整记录每个子物件的初始父节点，杜绝后续更新或归位时脱离舞台层级
-                    StageParentMap[child.name] = child.parent;
-                    StageParentMap[tmp_name] = child.parent;
-
-                    if (!StageObjectMap.ContainsKey(child.name))
+                    if (stage_part == null)
                     {
-                        if (child.name.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            child.gameObject.SetActive(true);
-                        }
+                        Debug.LogWarning("[StageController] 跳过 _stageObjects 中的 null 条目");
+                        continue;
+                    }
 
-                        StageObjectMap[tmp_name] = child.gameObject;
+                    var instance = Instantiate(stage_part, transform);
+
+                    int missingCount = CountMissingScripts(instance);
+                    if (missingCount > 0)
+                    {
+                        Debug.LogWarning($"[StageController] '{stage_part.name}' 实例化后有 {missingCount} 个 missing script 组件");
+                    }
+
+                    // 空材质防护检测：遍历生成的 Renderer，如果检测到 sharedMaterial == null 或 materials 包含 null，进行安全回退，杜绝裸露白色死模
+                    ProtectRendererMaterials(instance, stage_part.name);
+
+                    foreach (var child in instance.GetComponentsInChildren<Transform>(true))
+                    {
+                        var tmp_name = child.name.Replace("(Clone)", "");
+
+                        // 完整记录每个子物件的初始父节点，杜绝后续更新或归位时脱离舞台层级
+                        StageParentMap[child.name] = child.parent;
+                        StageParentMap[tmp_name] = child.parent;
+
                         if (!StageObjectMap.ContainsKey(child.name))
                         {
-                            StageObjectMap[child.name] = child.gameObject;
+                            if (child.name.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                child.gameObject.SetActive(true);
+                            }
+
+                            StageObjectMap[tmp_name] = child.gameObject;
+                            if (!StageObjectMap.ContainsKey(child.name))
+                            {
+                                StageObjectMap[child.name] = child.gameObject;
+                            }
                         }
                     }
                 }
             }
 
-            foreach (var unit in _stageObjectUnits)
+            if (_stageObjectUnits != null)
             {
-                if (unit == null || string.IsNullOrEmpty(unit.UnitName))
-                    continue;
-
-                if (!StageObjectUnitMap.ContainsKey(unit.UnitName))
+                foreach (var unit in _stageObjectUnits)
                 {
-                    StageObjectUnitMap.Add(unit.UnitName, unit);
+                    if (unit == null || string.IsNullOrEmpty(unit.UnitName))
+                        continue;
+
+                    if (!StageObjectUnitMap.ContainsKey(unit.UnitName))
+                    {
+                        StageObjectUnitMap.Add(unit.UnitName, unit);
+                    }
                 }
             }
 
