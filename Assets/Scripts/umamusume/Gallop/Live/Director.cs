@@ -790,6 +790,8 @@ namespace Gallop.Live
             string sourcePrefix = hasBg ? $"sourceresources/3d/env/live/live{bgId}/" : null;
             // 3. 舞台公共部件前缀（如公共天空球 pfb_env_live_cmn_sky002、公共荧光棒控制器等）
             string commonPrefix = hasBg ? "3d/env/live/common/" : null;
+            // 3.1 舞台公共材质与贴图资源前缀（如公共天空材质 mtl_env_live_cmn_sky*、云层材质 sky_cloud 等）
+            string commonSourcePrefix = hasBg ? "sourceresources/3d/env/live/common/" : null;
             // 4. 歌曲对应 UVMovie 视频资源前缀（如 1175 的 39 个 gal_uvmovie_1175_001 及分镜纹理包）
             string uvMoviePrefix = live.MusicId > 0 ? $"live/uvmovie/gal_uvmovie_{live.MusicId}" : null;
 
@@ -799,16 +801,18 @@ namespace Gallop.Live
                 if (entry == null || !entry.IsAssetBundle)
                     continue;
 
-                // 分别检查 key（资源相对路径）和 entry.Name 是否匹配任一舞台或 UVMovie 资源前缀
+                // 分别检查 key（资源相对路径）和 entry.Name 是否匹配任一舞台、公共材质或 UVMovie 资源前缀
                 bool keyMatches = (folderPrefix != null && kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase)) ||
                                   (sourcePrefix != null && kv.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
                                   (commonPrefix != null && kv.Key.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                                  (commonSourcePrefix != null && kv.Key.StartsWith(commonSourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
                                   (uvMoviePrefix != null && kv.Key.StartsWith(uvMoviePrefix, StringComparison.OrdinalIgnoreCase));
 
                 bool nameMatches = entry.Name != null && (
                     (folderPrefix != null && entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase)) ||
                     (sourcePrefix != null && entry.Name.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
                     (commonPrefix != null && entry.Name.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                    (commonSourcePrefix != null && entry.Name.StartsWith(commonSourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
                     (uvMoviePrefix != null && entry.Name.StartsWith(uvMoviePrefix, StringComparison.OrdinalIgnoreCase)));
 
                 if (keyMatches || nameMatches)
@@ -837,10 +841,11 @@ namespace Gallop.Live
             if (!hasBg && string.IsNullOrEmpty(uvMoviePrefix))
                 return;
 
-            // 同步兜底路径匹配专属舞台、sourceresources 材质包、common 公共部件以及当前歌曲的 UVMovie
+            // 同步兜底路径匹配专属舞台、sourceresources 材质包、common 公共部件、公共材质包以及当前歌曲的 UVMovie
             string folderPrefix = hasBg ? $"3d/env/live/live{bgId}/" : null;
             string sourcePrefix = hasBg ? $"sourceresources/3d/env/live/live{bgId}/" : null;
             string commonPrefix = hasBg ? "3d/env/live/common/" : null;
+            string commonSourcePrefix = hasBg ? "sourceresources/3d/env/live/common/" : null;
             var required = new List<UmaDatabaseEntry>();
 
             foreach (var kv in main.AbList)
@@ -849,16 +854,18 @@ namespace Gallop.Live
                 if (entry == null || !entry.IsAssetBundle)
                     continue;
 
-                // 同样匹配舞台专属模型、材质包、公共部件以及当前歌曲的 UVMovie 资源
+                // 同样匹配舞台专属模型、材质包、公共部件、公共材质包以及当前歌曲的 UVMovie 资源
                 bool keyMatches = (folderPrefix != null && kv.Key.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase)) ||
                                   (sourcePrefix != null && kv.Key.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
                                   (commonPrefix != null && kv.Key.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                                  (commonSourcePrefix != null && kv.Key.StartsWith(commonSourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
                                   (uvMoviePrefix != null && kv.Key.StartsWith(uvMoviePrefix, StringComparison.OrdinalIgnoreCase));
 
                 bool nameMatches = entry.Name != null && (
                     (folderPrefix != null && entry.Name.StartsWith(folderPrefix, StringComparison.OrdinalIgnoreCase)) ||
                     (sourcePrefix != null && entry.Name.StartsWith(sourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
                     (commonPrefix != null && entry.Name.StartsWith(commonPrefix, StringComparison.OrdinalIgnoreCase)) ||
+                    (commonSourcePrefix != null && entry.Name.StartsWith(commonSourcePrefix, StringComparison.OrdinalIgnoreCase)) ||
                     (uvMoviePrefix != null && entry.Name.StartsWith(uvMoviePrefix, StringComparison.OrdinalIgnoreCase)));
 
                 if (keyMatches || nameMatches)

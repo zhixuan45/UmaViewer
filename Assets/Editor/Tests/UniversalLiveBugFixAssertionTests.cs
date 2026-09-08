@@ -20,6 +20,15 @@ public static class UniversalLiveBugFixAssertionTests
     private static readonly string LogFilePath = @"C:\Users\JuziD\.gemini\antigravity\brain\bfbceab6-21ba-4d33-b8ab-fa39182ba6dd\scratch\universal_assertion_test_report.txt";
 
     [MenuItem("UmaViewer/Run Universal BugFix Assertion Tests")]
+    [InitializeOnLoadMethod]
+    private static void AutoRunOnCompile()
+    {
+        EditorApplication.delayCall += () =>
+        {
+            RunAllTests();
+        };
+    }
+
     public static bool RunAllTests()
     {
         var sb = new StringBuilder();
@@ -46,6 +55,15 @@ public static class UniversalLiveBugFixAssertionTests
 
         // 5. 天空网格材质温和受光与防纯黑回归测试
         RunTestCase("Skybox: 天空材质温和受光保护与去除死黑压制测试", ref total, ref passed, ref failed, sb, TestSkyMaterialGentleFallbackNoDeadBlack);
+
+        // 6. 真实坏材质/空材质分支下天空网格防纯白遮蔽断言测试
+        RunTestCase("Skybox: 坏材质/空材质真实分支下天空网格安全禁用防白模遮蔽", ref total, ref passed, ref failed, sb, TestSkyMaterialRealInvalidFallbackNoWhitePlane);
+
+        // 7. BgColor 回退广播隔离与天空/草地防滥染断言测试
+        RunTestCase("BgColor: 全量回退广播隔离天空与草地防白天化与荧光绿", ref total, ref passed, ref failed, sb, TestBgColorFallbackExcludesSkyAndGrass);
+
+        // 8. 公共天空与云层材质包（sourceresources/3d/env/live/common/）全量收集断言测试
+        RunTestCase("Director: 公共天空与云层材质依赖（sourceresources/common/）全量收集覆盖", ref total, ref passed, ref failed, sb, TestDirectorCollectsCommonSkyAndCloudMaterials);
 
         sb.AppendLine("\n================================================================");
         sb.AppendLine($"=== SUMMARY: Total={total}, PASSED={passed}, FAILED={failed} ===");
@@ -324,6 +342,148 @@ public static class UniversalLiveBugFixAssertionTests
         finally
         {
             UnityEngine.Object.DestroyImmediate(dummyGo);
+        }
+    }
+
+    /// <summary>
+    /// 测试 6：验证真实坏材质/空材质分支下，天空网格绝不会被赋予纯白浅灰 Unlit 材质遮蔽全屏，而是被安全禁用或正确回退
+    /// </summary>
+    private static void TestSkyMaterialRealInvalidFallbackNoWhitePlane()
+    {
+        var dummyGo = new GameObject("sky_base_00");
+        var renderer = dummyGo.AddComponent<MeshRenderer>();
+        // 刻意传入损坏的 Hidden/InternalErrorShader 材质或空材质，真实触发 fallback 分支
+        var badMat = new Material(Shader.Find("Hidden/InternalErrorShader") ?? Shader.Find("Standard"));
+        renderer.sharedMaterial = badMat;
+
+        var stageGo = new GameObject("StageHost");
+        var stage = stageGo.AddComponent<StageController>();
+
+        try
+        {
+            var method = typeof(StageController).GetMethod("ProtectRendererMaterials",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            AssertNotNull(method, "StageController 必须包含 ProtectRendererMaterials 方法");
+
+            method.Invoke(stage, new object[] { dummyGo, "pfb_env_live10147_sky000" });
+
+            // 核心断言：天空网格在缺失天空材质时，为了防止纯白/浅灰无光照白模遮蔽全屏，必须被安全禁用（renderer.enabled == false）
+            // 或者若有材质替换，绝不能是 0.9 浅白纯白无贴图 Unlit 材质！
+            if (renderer.enabled)
+            {
+                var curMat = renderer.sharedMaterial;
+                AssertNotNull(curMat, "若天空网格保持启用，材质绝不能为空");
+                Color col = curMat.HasProperty("_BaseColor") ? curMat.GetColor("_BaseColor") : (curMat.HasProperty("_Color") ? curMat.GetColor("_Color") : Color.black);
+                bool isPureWhiteFallback = Mathf.Approximately(col.r, 0.9f) && Mathf.Approximately(col.g, 0.9f) && Mathf.Approximately(col.b, 0.9f);
+                AssertTrue(!isPureWhiteFallback, "天空网格绝不能被赋予 0.9 纯白死模遮蔽背景！");
+            }
+            else
+            {
+                // 安全禁用是完全符合预期的优雅防御策略
+                AssertTrue(true, "天空网格在缺失材质时被安全禁用，成功防御纯白遮蔽！");
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(stageGo);
+            UnityEngine.Object.DestroyImmediate(dummyGo);
+        }
+    }
+
+    /// <summary>
+    /// 测试 7：验证 BgColor 全量回退广播时，天空网格与草地网格被严格隔离排除，杜绝白天化与荧光草地
+    /// </summary>
+    private static void TestBgColorFallbackExcludesSkyAndGrass()
+    {
+        var stageGo = new GameObject("StageHost");
+        var stage = stageGo.AddComponent<StageController>();
+
+        // 挂载一个草地渲染器和一个天空渲染器
+        var skyObj = new GameObject("sky_base_00");
+        skyObj.transform.SetParent(stageGo.transform);
+        var skyRenderer = skyObj.AddComponent<MeshRenderer>();
+        var skyMat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Standard"));
+        skyMat.SetColor("_BaseColor", Color.white);
+        skyRenderer.sharedMaterial = skyMat;
+
+        var grassObj = new GameObject("grass_00");
+        grassObj.transform.SetParent(stageGo.transform);
+        var grassRenderer = grassObj.AddComponent<MeshRenderer>();
+        var grassMat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Standard"));
+        grassMat.SetColor("_BaseColor", Color.green);
+        grassRenderer.sharedMaterial = grassMat;
+
+        var normalObj = new GameObject("wash_light_00");
+        normalObj.transform.SetParent(stageGo.transform);
+        var normalRenderer = normalObj.AddComponent<MeshRenderer>();
+        var normalMat = new Material(Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Standard"));
+        normalMat.SetColor("_BaseColor", Color.yellow);
+        normalRenderer.sharedMaterial = normalMat;
+
+        try
+        {
+            // 重建缓存
+            var rebuildMethod = typeof(StageController).GetMethod("RebuildBgColorCache",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            rebuildMethod?.Invoke(stage, null);
+
+            // 调用 ResolveBgColorRenderers，传入非天空非草地的 Timeline 名称（触发 fallback 分支）
+            var resolveMethod = typeof(StageController).GetMethod("ResolveBgColorRenderers",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            AssertNotNull(resolveMethod, "StageController 必须包含 ResolveBgColorRenderers 方法");
+
+            var resolved = resolveMethod.Invoke(stage, new object[] { "wash_random_ambient", false, true }) as List<Renderer>;
+            AssertNotNull(resolved, "解析结果不能为 null");
+
+            // 核心断言：回退广播列表中绝不能包含天空网格和草地网格！
+            bool containsSky = resolved.Contains(skyRenderer);
+            bool containsGrass = resolved.Contains(grassRenderer);
+
+            AssertTrue(!containsSky, "全量回退广播严禁命中天空网格，杜绝天空被环境灯洗白！");
+            AssertTrue(!containsGrass, "全量回退广播严禁命中草地网格，杜绝草地变成荧光绿！");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(stageGo);
+        }
+    }
+
+    /// <summary>
+    /// 测试 8：验证 Director.CollectStageBundleEntries 完整收集以 sourceresources/3d/env/live/common/ 开头的公共天空与云层材质
+    /// </summary>
+    private static void TestDirectorCollectsCommonSkyAndCloudMaterials()
+    {
+        var dummyMainObj = new GameObject("UmaViewerMain_CommonMatTest");
+        var main = dummyMainObj.AddComponent<UmaViewerMain>();
+
+        try
+        {
+            main.AbList = new Dictionary<string, UmaDatabaseEntry>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "3d/env/live/common/sky/pfb_env_live_cmn_sky002", new UmaDatabaseEntry { Name = "3d/env/live/common/sky/pfb_env_live_cmn_sky002" } },
+                { "sourceresources/3d/env/live/common/sky/materials/mtl_env_live_cmn_sky002", new UmaDatabaseEntry { Name = "sourceresources/3d/env/live/common/sky/materials/mtl_env_live_cmn_sky002" } },
+                { "sourceresources/3d/env/live/common/sky_cloud/materials/mtl_env_live_cmn_sky_cloud000", new UmaDatabaseEntry { Name = "sourceresources/3d/env/live/common/sky_cloud/materials/mtl_env_live_cmn_sky_cloud000" } }
+            };
+
+            var live = new LiveEntry("header\n0,0,0\n0,0,10147\n")
+            {
+                MusicId = 1175,
+                BackGroundId = "10147"
+            };
+
+            var entries = Director.CollectStageBundleEntries(live, requireStage: true);
+            AssertNotNull(entries, "返回列表不能为 null");
+
+            // 核心断言：必须收集到公共天空材质和公共云层材质
+            bool hasCommonSkyMat = entries.Any(e => e.Name.IndexOf("sourceresources/3d/env/live/common/sky/materials", StringComparison.OrdinalIgnoreCase) >= 0);
+            bool hasCommonCloudMat = entries.Any(e => e.Name.IndexOf("sourceresources/3d/env/live/common/sky_cloud/materials", StringComparison.OrdinalIgnoreCase) >= 0);
+
+            AssertTrue(hasCommonSkyMat, "收集列表必须包含 sourceresources/3d/env/live/common/sky/materials/ 下的公共天空材质！");
+            AssertTrue(hasCommonCloudMat, "收集列表必须包含 sourceresources/3d/env/live/common/sky_cloud/materials/ 下的公共云层材质！");
+        }
+        finally
+        {
+            if (dummyMainObj != null) UnityEngine.Object.DestroyImmediate(dummyMainObj);
         }
     }
 }

@@ -333,9 +333,10 @@ namespace Gallop.Live
 
             SetupLaserObject(ctl.data);
 
+            // 无论当前舞台是否有 Laser，尝试设置完毕后均标记为完成，杜绝每帧重复调用刷屏
+            _laserSetupDone = true;
             if (_laserControllerArray != null && _laserControllerArray.Length > 0)
             {
-                _laserSetupDone = true;
                 Debug.Log("[StageController] Laser setup done. count=" + _laserControllerArray.Length);
             }
         }
@@ -1144,6 +1145,9 @@ namespace Gallop.Live
             }
 
             AutoAttachMirrorReflectionComponents();
+
+            // 在舞台初始化完成时输出关键部件快照诊断，摸清天空、草地和监视器的真实材质与 Shader 状态
+            StageRuntimeDiagnostics.SnapshotStageRenderers(gameObject);
         }
 
         /// <summary>
@@ -1192,11 +1196,16 @@ namespace Gallop.Live
                 if (!hasInvalid)
                     continue;
 
-                Debug.LogWarning($"[StageController] 舞台部件 '{partName}' 下的渲染器 '{r.name}' 存在空材质或着色器损坏，正在尝试安全回退修复...");
+                bool isSky = (r.name ?? "").IndexOf("sky", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             (partName ?? "").IndexOf("sky", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                Debug.LogWarning($"[StageController] 舞台部件 '{partName}' 下的渲染器 '{r.name}' (isSky={isSky}) 存在空材质或着色器损坏，正在尝试安全修复...");
 
                 var fixedMats = (sharedMats != null && sharedMats.Length > 0)
                     ? (Material[])sharedMats.Clone()
                     : new Material[1];
+
+                bool disableRenderer = false;
 
                 for (int i = 0; i < fixedMats.Length; i++)
                 {
@@ -1213,23 +1222,39 @@ namespace Gallop.Live
 
                     Material fallbackMat = FindMatchingLoadedMaterial(loadedMaterialsCache, r.name, partName);
 
-                    // 2. 若未找到相匹配的已载入材质，尝试从同部件中其他有效渲染器借用备用材质
-                    if (fallbackMat == null)
+                    // 2. 若未找到相匹配的已载入材质：
+                    // 注意：天空网格严格禁止从同部件中借用草地或普通物体材质，防止借错导致全屏错乱！
+                    if (fallbackMat == null && !isSky)
                     {
                         fallbackMat = FindSiblingFallbackMaterial(renderers);
                     }
 
-                    // 3. 若仍未找到，仅在材质缺失或着色器损坏时构建温和的基础无光照材质兜底
+                    // 3. 若仍未找到：
+                    // 如果是天空网格且没有任何可用天空材质，安全禁用该 Renderer，防止纯白无光照白模遮蔽整个舞台背景！
                     if (fallbackMat == null)
                     {
+                        if (isSky)
+                        {
+                            Debug.LogWarning($"[StageController] 天空网格 '{r.name}' 缺少天空专用材质，为防止白模遮蔽全屏，安全禁用该渲染器。");
+                            disableRenderer = true;
+                            break;
+                        }
+
                         fallbackMat = CreateSafeFallbackMaterial(r.name);
                     }
 
                     fixedMats[i] = fallbackMat;
                 }
 
-                r.sharedMaterials = fixedMats;
-                Debug.Log($"[StageController] 渲染器 '{r.name}' 材质已成功修复为安全材质: {string.Join(", ", fixedMats.Select(m => m != null ? m.name : "null"))}");
+                if (disableRenderer)
+                {
+                    r.enabled = false;
+                }
+                else
+                {
+                    r.sharedMaterials = fixedMats;
+                    Debug.Log($"[StageController] 渲染器 '{r.name}' 材质已成功修复为安全材质: {string.Join(", ", fixedMats.Select(m => m != null ? m.name : "null"))}");
+                }
             }
         }
 
@@ -1466,6 +1491,10 @@ namespace Gallop.Live
                 return;
 
             var targets = ResolveBgColorRenderers(updateInfo.TimelineName, wantBgColor2Style: false);
+
+            // 运行时诊断：记录 BgColor1 实际命中的目标渲染器与颜色
+            StageRuntimeDiagnostics.LogBgColorHit(updateInfo.TimelineName, 1, targets, updateInfo.color, updateInfo.colorPower);
+
             if (targets == null || targets.Count == 0)
                 return;
 
@@ -1490,6 +1519,11 @@ namespace Gallop.Live
                     if (mat.HasProperty("_OutlineColor")) mat.SetColor("_OutlineColor", updateInfo.outlineColor);
                     if (mat.HasProperty("_Saturation")) mat.SetFloat("_Saturation", updateInfo.Saturation);
                     if (mat.HasProperty("_ColorPower") && updateInfo.colorPower > 0f) mat.SetFloat("_ColorPower", updateInfo.colorPower);
+
+                    // 核心补全：天空网格与通用舞台材质使用的是 _BaseColor、_Color 或 _MulColor0
+                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", updateInfo.color);
+                    if (mat.HasProperty("_Color")) mat.SetColor("_Color", updateInfo.color);
+                    if (mat.HasProperty("_MulColor0")) mat.SetColor("_MulColor0", updateInfo.color);
                 }
             }
         }
@@ -1502,6 +1536,13 @@ namespace Gallop.Live
             float extra = ResolveBgColorExtraValue(updateInfo.randomTableIndex);
 
             var groups = ResolveBgColor2Groups(updateInfo.TimelineName);
+
+            // 运行时诊断：记录 BgColor2 实际命中的目标渲染器与颜色
+            List<Renderer> logTargets = (groups != null && groups.Count > 0)
+                ? groups.SelectMany(g => g.renderers).Distinct().ToList()
+                : null;
+            StageRuntimeDiagnostics.LogBgColorHit(updateInfo.TimelineName, 2, logTargets, updateInfo.color1, updateInfo.power);
+
             if (groups != null && groups.Count > 0)
             {
                 for (int i = 0; i < groups.Count; i++)
@@ -2245,7 +2286,18 @@ namespace Gallop.Live
             var resolved = set.ToList();
             if (resolved.Count == 0 && _bgColorFallbackToAllEligible && allowAllEligibleFallback)
             {
-                resolved = _bgColorAllEligibleRenderers.Where(r => r != null && (wantBgColor2Style ? RendererHasBgColor2Props(r) : RendererHasBgColor1Props(r))).ToList();
+                // 采纳高级模型核心建议：全量回退广播时，严禁向天空与草地滥染造成白天化与荧光草地！
+                // 只有当 timelineName 明确包含 sky 或 grass 时才允许命中天空或草地。
+                bool timelineIsSky = key.Contains("sky");
+                bool timelineIsGrass = key.Contains("grass");
+
+                resolved = _bgColorAllEligibleRenderers.Where(r => {
+                    if (r == null) return false;
+                    string rn = r.name.ToLowerInvariant();
+                    if (!timelineIsSky && rn.Contains("sky")) return false;
+                    if (!timelineIsGrass && rn.Contains("grass")) return false;
+                    return wantBgColor2Style ? RendererHasBgColor2Props(r) : RendererHasBgColor1Props(r);
+                }).ToList();
             }
 
             if (resolved.Count == 0)
@@ -2487,6 +2539,9 @@ namespace Gallop.Live
                 var m = mats[i];
                 if (m == null) continue;
                 if (m.HasProperty("_CharaColor") || m.HasProperty("_ToonDarkColor") || m.HasProperty("_ToonBrightColor") || m.HasProperty("_OutlineColor") || m.HasProperty("_Saturation"))
+                    return true;
+                // 支持天空球及通用舞台材质的颜色属性
+                if (m.HasProperty("_BaseColor") || m.HasProperty("_Color") || m.HasProperty("_MulColor0"))
                     return true;
             }
             return false;
