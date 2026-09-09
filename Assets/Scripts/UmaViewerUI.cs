@@ -895,6 +895,11 @@ public class UmaViewerUI : MonoBehaviour
     public void PlayLive()
     {
         if (currentLive == null) return;
+
+        // 第 0 毫秒立即隐藏选人面板并唤起加载进度条，杜绝界面假死与空白定格
+        LiveSelectPannel.SetActive(false);
+        UmaSceneController.instance.LoadingProgressChange(0, 100, "Preparing Live Assets...");
+
         PoseManager.SetPoseMode(false);
         var selectlist = LiveSelectList.content.GetComponentsInChildren<LiveCharacterSelect>();
         if (selectlist != null)
@@ -903,7 +908,6 @@ public class UmaViewerUI : MonoBehaviour
             LiveTime = true;
             ModelSettings.SetEyeTrackingEnable(false);
             Builder.LoadLive(currentLive, new List<LiveCharacterSelect>(selectlist));
-            LiveSelectPannel.SetActive(false);
         }
     }
 

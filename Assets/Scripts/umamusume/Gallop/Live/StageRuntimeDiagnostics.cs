@@ -96,8 +96,12 @@ namespace Gallop.Live
                     bool hasMainTex = mat.HasProperty("_MainTex") && mat.GetTexture("_MainTex") != null;
                     bool hasBaseMap = mat.HasProperty("_BaseMap") && mat.GetTexture("_BaseMap") != null;
 
-                    // 检查常规颜色属性
-                    string colDesc = "";
+                    // 检查常规颜色与混合状态属性
+                    string colDesc = $" queue={mat.renderQueue}";
+                    if (mat.HasProperty("_SrcBlend")) colDesc += $" _SrcBlend={mat.GetFloat("_SrcBlend")}";
+                    if (mat.HasProperty("_DstBlend")) colDesc += $" _DstBlend={mat.GetFloat("_DstBlend")}";
+                    if (mat.HasProperty("_ZWrite")) colDesc += $" _ZWrite={mat.GetFloat("_ZWrite")}";
+                    if (mat.HasProperty("_Cull")) colDesc += $" _Cull={mat.GetFloat("_Cull")}";
                     if (mat.HasProperty("_Color")) colDesc += $" _Color={mat.GetColor("_Color")}";
                     if (mat.HasProperty("_BaseColor")) colDesc += $" _BaseColor={mat.GetColor("_BaseColor")}";
                     if (mat.HasProperty("_MulColor0")) colDesc += $" _MulColor0={mat.GetColor("_MulColor0")}";

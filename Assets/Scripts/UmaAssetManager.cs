@@ -102,6 +102,10 @@ public class UmaAssetManager : MonoBehaviour
 
     private IEnumerator PreLoadAsset(List<UmaDatabaseEntry> entries, Action onDone)
     {
+        // 在执行庞大的依赖树解析之前让出一帧，确保上一帧由 UI 唤起的加载进度界面能够得到及时渲染，彻底消除定格卡死
+        yield return null;
+        OnLoadProgressChange?.Invoke(0, 100, "Analyzing Dependencies...");
+
         List<UmaDatabaseEntry> roots = DeduplicateEntries(entries);
         List<UmaDatabaseEntry> downloadEntries = ExpandUniqueEntries(roots);
 
@@ -117,6 +121,9 @@ public class UmaAssetManager : MonoBehaviour
 
         for (int i = 0; i < roots.Count; i++)
         {
+            // 在解析 roots 依赖列表的循环中分步刷新加载提示，并显示当前解析进度，避免长时间主线程卡顿
+            OnLoadProgressChange?.Invoke(i + 1, roots.Count, "Analyzing Dependencies...");
+
             UmaDatabaseEntry root = roots[i];
             List<UmaDatabaseEntry> requests = SearchAB(UmaViewerMain.Instance, root);
 
@@ -142,7 +149,10 @@ public class UmaAssetManager : MonoBehaviour
                 yield return null;
         }
 
-        OnLoadProgressChange?.Invoke(-1, loadItems.Count, null);
+        // 资源预载完毕：不要在此刻直接隐藏关闭 LoadingProgressPanel（避免退出重进时瞬间关闭导致主线程同步实例化模型卡死假象），
+        // 而是展示 "Loading Characters & Stage..."，直到 LoadLiveUma 与场景加载全部就绪即将开播时才隐藏
+        int total = Mathf.Max(1, loadItems.Count);
+        OnLoadProgressChange?.Invoke(total, total, "Loading Characters & Stage...");
         LoadCoroutine = null;
         onDone?.Invoke();
     }

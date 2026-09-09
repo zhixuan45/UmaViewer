@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using TMPro;
 using UnityEngine;
@@ -72,21 +72,28 @@ public class UmaSceneController:MonoBehaviour
 
     public void LoadingProgressChange(int curren, int target, string message = null)
     {
-        if(curren == -1)
+        if (curren == -1)
         {
-            LoadingProgressPanel.SetActive(false);
+            if (LoadingProgressPanel != null)
+                LoadingProgressPanel.SetActive(false);
         }
         else if (target > 0)
         {
-            LoadingProgressPanel.SetActive(true);
-            LoadingProgressSlider.value = (float)curren / target;
-            if (string.IsNullOrEmpty(message))
+            if (LoadingProgressPanel != null)
+                LoadingProgressPanel.SetActive(true);
+            if (LoadingProgressSlider != null)
+                LoadingProgressSlider.value = (float)curren / target;
+            if (LoadingProgressText != null)
             {
-                LoadingProgressText.text = $"Loading...({curren}/{target})";
-            }
-            else
-            {
-                LoadingProgressText.text = $"{message}({curren}/{target})";
+                if (string.IsNullOrEmpty(message))
+                {
+                    LoadingProgressText.text = $"Loading...({curren}/{target})";
+                }
+                else
+                {
+                    // 若当前计数已达目标且提供了明确阶段描述（如 Loading Characters & Stage...），直接展示完整说明
+                    LoadingProgressText.text = (curren >= target) ? message : $"{message}({curren}/{target})";
+                }
             }
         }
     }

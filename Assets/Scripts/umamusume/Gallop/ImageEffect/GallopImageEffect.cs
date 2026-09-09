@@ -30,6 +30,11 @@ namespace Gallop
             }
         }
 
+        /// <summary>
+        /// 第二步隔离测试调试开关：控制是否临时全局禁用 URP Bloom / Diffusion 泛光，排查是否导致天空压白与荧光绿
+        /// </summary>
+        public static bool DisableBloomForDebug = false;
+
         private void Awake()
         {
             InitializeVolume();
@@ -54,7 +59,7 @@ namespace Gallop
             // 全局化后，全屏任意机位均能全局执行后处理，并通过高优先级 (100f) 与完全权重 (1f) 保证后处理效果正确覆盖。
             _volume.isGlobal = true;
             _volume.priority = 100f;
-            _volume.weight = 1f;
+            _volume.weight = DisableBloomForDebug ? 0f : 1f;
 
             if (_volume.sharedProfile != null)
                 _runtimeProfile =
@@ -89,11 +94,17 @@ namespace Gallop
             if (_bloom == null)
                 return;
 
+            if (DisableBloomForDebug)
+            {
+                _bloom.active = false;
+                if (_volume != null) _volume.weight = 0f;
+                return;
+            }
+
             var param = _dofDiffusionBloomOverlayParam;
             if (param == null)
                 return;
 
-            // 1. 强度叠加与调优：综合考虑 BloomIntensity 与 DiffusionBright
             float bloomIntensity = param.IsEnableBloom ? Mathf.Max(0f, param.BloomIntensity) : 0f;
             float diffusionFactor = param.IsEnableDiffusion ? Mathf.Max(0f, param.DiffusionBright) : 0f;
             float totalIntensity = bloomIntensity + diffusionFactor;

@@ -62,6 +62,15 @@ public static class UniversalLiveBugFixAssertionTests
         // 8. 公共天空与云层材质包（sourceresources/3d/env/live/common/）全量收集断言测试
         RunTestCase("Director: 公共天空与云层材质依赖（sourceresources/common/）全量收集覆盖", ref total, ref passed, ref failed, sb, TestDirectorCollectsCommonSkyAndCloudMaterials);
 
+        // 9. 时间轴 BgColor1 单次派发回归断言
+        RunTestCase("LiveTimelineControl: AlterLateUpdate 每帧只派发一次 BgColor1", ref total, ref passed, ref failed, sb, TestBgColor1DispatchedOncePerLateUpdate);
+
+        // 10. Live 专属动作包预载收集断言测试
+        RunTestCase("Director: Live 专属身体与 CUTT 动作包预加载全量收集覆盖", ref total, ref passed, ref failed, sb, TestDirectorCollectsLiveMotionPackages);
+
+        // 11. LiveTimelineMotionSequence 动作健全性与防崩溃防御断言测试
+        RunTestCase("LiveTimelineMotionSequence: 缺失组件或空 Clip 时安全防崩溃与防御断言", ref total, ref passed, ref failed, sb, TestMotionSequenceRobustnessDefense);
+
         sb.AppendLine("\n================================================================");
         sb.AppendLine($"=== SUMMARY: Total={total}, PASSED={passed}, FAILED={failed} ===");
         sb.AppendLine("================================================================");
@@ -125,6 +134,8 @@ public static class UniversalLiveBugFixAssertionTests
         var camGo = new GameObject("Test_PostEffect_Camera");
         var cam = camGo.AddComponent<Camera>();
         var effect = camGo.AddComponent<GallopImageEffect>();
+        bool prevDisable = GallopImageEffect.DisableBloomForDebug;
+        GallopImageEffect.DisableBloomForDebug = false;
 
         try
         {
@@ -159,6 +170,7 @@ public static class UniversalLiveBugFixAssertionTests
         }
         finally
         {
+            GallopImageEffect.DisableBloomForDebug = prevDisable;
             UnityEngine.Object.DestroyImmediate(camGo);
         }
     }
@@ -495,6 +507,114 @@ public static class UniversalLiveBugFixAssertionTests
         {
             if (dummyMainObj != null) UnityEngine.Object.DestroyImmediate(dummyMainObj);
             UmaViewerMain.Instance = prevMain;
+        }
+    }
+
+    /// <summary>
+    /// 测试 9：防止 AlterLateUpdate 重复派发 BgColor1，避免订阅者重复染色或污染共享材质。
+    /// </summary>
+    private static void TestBgColor1DispatchedOncePerLateUpdate()
+    {
+        const string assetPath = "Assets/Scripts/umamusume/Gallop/Live/Cutt/LiveTimeLine/LiveTimelineControl.cs";
+
+        string source = File.ReadAllText(assetPath, Encoding.UTF8);
+        const string methodStart = "public void AlterLateUpdate()";
+        int start = source.IndexOf(methodStart, StringComparison.Ordinal);
+        AssertTrue(start >= 0, "LiveTimelineControl 必须包含 AlterLateUpdate 方法");
+
+        int nextMethod = source.IndexOf("\n        private ", start, StringComparison.Ordinal);
+        AssertTrue(nextMethod > start, "AlterLateUpdate 方法边界必须可解析");
+
+        string methodBody = source.Substring(start, nextMethod - start);
+        int callCount = 0;
+        int searchOffset = 0;
+        const string call = "AlterUpdate_BgColor1(camSheet, _currentFrame);";
+        while ((searchOffset = methodBody.IndexOf(call, searchOffset, StringComparison.Ordinal)) >= 0)
+        {
+            callCount++;
+            searchOffset += call.Length;
+        }
+
+        AssertTrue(callCount == 1, $"AlterLateUpdate 中 BgColor1 调用次数应为 1，实际为 {callCount}");
+    }
+
+    /// <summary>
+    /// 测试 10：验证 Director.GetLivePreloadEntries 是否能完整收集该 Live 专属的身体动作包与 CUTT 动作包。
+    /// </summary>
+    private static void TestDirectorCollectsLiveMotionPackages()
+    {
+        var prevMain = UmaViewerMain.Instance;
+        GameObject dummyMainObj = null;
+        try
+        {
+            if (prevMain == null)
+            {
+                dummyMainObj = new GameObject("DummyUmaViewerMain_MotionPreloadTest");
+                var dummyMain = dummyMainObj.AddComponent<UmaViewerMain>();
+                dummyMain.AbList = new Dictionary<string, UmaDatabaseEntry>(StringComparer.OrdinalIgnoreCase);
+                UmaViewerMain.Instance = dummyMain;
+            }
+
+            var abList = UmaViewerMain.Instance.AbList;
+            abList.Clear();
+
+            const int testMusicId = 1040;
+            string bodyMotionKey = $"3d/motion/live/body/son{testMusicId}/son{testMusicId}_01";
+            string cuttMotionKey = $"3d/motion/live/cutt/son{testMusicId}/cutt_son{testMusicId}_cam";
+            string irrelevantMotionKey = "3d/motion/live/body/son9999/son9999_01";
+
+            abList[bodyMotionKey] = new UmaDatabaseEntry { Name = bodyMotionKey };
+            abList[cuttMotionKey] = new UmaDatabaseEntry { Name = cuttMotionKey };
+            abList[irrelevantMotionKey] = new UmaDatabaseEntry { Name = irrelevantMotionKey };
+
+            var live = new LiveEntry("header\n0,0,0\n0,0,1040\n") { MusicId = testMusicId, BackGroundId = "1040" };
+            var preloadEntries = Director.GetLivePreloadEntries(live, new List<LiveCharacterLoadData>(), requireStage: false);
+
+            AssertNotNull(preloadEntries, "预加载资源列表不能为 null");
+            bool hasBodyMotion = preloadEntries.Any(e => string.Equals(e.Name, bodyMotionKey, StringComparison.OrdinalIgnoreCase));
+            bool hasCuttMotion = preloadEntries.Any(e => string.Equals(e.Name, cuttMotionKey, StringComparison.OrdinalIgnoreCase));
+            bool hasIrrelevant = preloadEntries.Any(e => string.Equals(e.Name, irrelevantMotionKey, StringComparison.OrdinalIgnoreCase));
+
+            AssertTrue(hasBodyMotion, $"预加载列表中必须包含专属身体动作包: {bodyMotionKey}");
+            AssertTrue(hasCuttMotion, $"预加载列表中必须包含专属 CUTT 动作包: {cuttMotionKey}");
+            AssertTrue(!hasIrrelevant, "预加载列表中不应包含其他无关歌曲的动作包");
+        }
+        finally
+        {
+            if (dummyMainObj != null) UnityEngine.Object.DestroyImmediate(dummyMainObj);
+            UmaViewerMain.Instance = prevMain;
+        }
+    }
+
+    /// <summary>
+    /// 测试 11：验证 LiveTimelineMotionSequence 在缺失动画组件、缺失动作 Clip 时能够防御空指针并保持安全健壮。
+    /// </summary>
+    private static void TestMotionSequenceRobustnessDefense()
+    {
+        var motionSeq = new LiveTimelineMotionSequence();
+        AssertNotNull(motionSeq, "LiveTimelineMotionSequence 实例化成功");
+
+        // 验证在目标 GameObject 与 Animation 组件均缺失时，调用 Initialize 不会抛出未处理空指针异常
+        GameObject dummyChara = new GameObject("DummyChara_MotionTest");
+        try
+        {
+            var timelineControlObj = new GameObject("DummyTimelineControl_MotionTest");
+            var control = timelineControlObj.AddComponent<LiveTimelineControl>();
+            control._keyArray = new LiveTimelineKeyCharaMotionSeqDataList[0];
+
+            // 传入越界的 targetIndex 与 seqDataIndex，测试其安全容错
+            motionSeq.Initialize(dummyChara.transform, targetIndex: 99, seqDataIndex: 99, timelineControl: control);
+
+            // 调用 AlterUpdate 测试其不会因 _tempAnim 或 _currentKey 为空产生未捕获崩溃
+            var dummyTimescaleList = new LiveTimelineKeyTimescaleDataList();
+            dummyTimescaleList.thisList = new List<LiveTimelineKeyTimescaleData>();
+            motionSeq.AlterUpdate(0f, dummyTimescaleList);
+
+            UnityEngine.Object.DestroyImmediate(timelineControlObj);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(dummyChara);
         }
     }
 }
