@@ -282,6 +282,8 @@ namespace Gallop.Live.Cutt
 
         public void AlterUpdate(float liveTime)
         {
+            LiveFrameProfiler.Begin(LiveFrameProfiler.AlterUpdate);
+
             _isNowAlterUpdate = true;
             _isMultiCameraEnable = false;
             _isNowAlterUpdate = true;
@@ -291,11 +293,28 @@ namespace Gallop.Live.Cutt
             _oldFrame = _oldLiveTime * 60f;
             _deltaTime = currentLiveTime - _oldLiveTime;
             _deltaTimeRatio = _deltaTime / 0.0166666675f;
+
+            LiveFrameProfiler.Begin(LiveFrameProfiler.MotionSequence);
             AlterUpdate_CharaMotionSequence(liveTime);
+            LiveFrameProfiler.End(LiveFrameProfiler.MotionSequence);
+
+            LiveFrameProfiler.Begin(LiveFrameProfiler.Facial);
             AlterUpdate_FacialData(liveTime);
+            LiveFrameProfiler.End(LiveFrameProfiler.Facial);
+
             AlterUpdate_LipSync(liveTime);
             AlterUpdate_LipSync2(liveTime);
+
+            // 道具（Props）不在这里驱动。
+            // AlterLateUpdate 才是骨骼姿态解算完成之后的时间点，AlterUpdate_PropsControl /
+            // AlterUpdate_PropsAttachControl 统一在那边按 worksheet 各跑一次即可。
+            // 此前两处都调用，等于每帧对每个 worksheet 重复派发两遍道具更新
+            // （订阅方 UpdateProps 会做 renderer.enabled、SetPropertyBlock、Animation.Sample），
+            // 是 Live 掉帧的直接来源之一。
+
             _isNowAlterUpdate = false;
+
+            LiveFrameProfiler.End(LiveFrameProfiler.AlterUpdate);
         }
 
         public void AlterLateUpdate()
@@ -305,18 +324,26 @@ namespace Gallop.Live.Cutt
 
             LiveTimelineWorkSheet camSheet = data.worksheetList[0];
 
+            LiveFrameProfiler.Begin(LiveFrameProfiler.AlterLateUpdate);
+
             _isNowAlterUpdate = true;
 
             Vector3 outLookAt = Vector3.zero;
 
+            LiveFrameProfiler.Begin(LiveFrameProfiler.CameraGroup);
             AlterLateUpdate_FormationOffset(currentLiveTime);
             AlterUpdate_CameraSwitcher(camSheet, _currentFrame);
             AlterUpdate_CameraPos(camSheet, _currentFrame);
             AlterUpdate_CameraLookAt(camSheet, _currentFrame, ref outLookAt);
             AlterUpdate_CameraFov(camSheet, _currentFrame);
             AlterUpdate_CameraRoll(camSheet, _currentFrame);
+            // 调度多机位：分屏图层分割线、多机位各路相机位置与朝向
             AlterUpdate_MultiCamera(camSheet, _currentFrame);
+            // 调度舞台监视器摄像机位置与注视点
+            Director.instance?.UpdateMonitorCamera(camSheet, _currentFrame);
+            LiveFrameProfiler.End(LiveFrameProfiler.CameraGroup);
 
+            LiveFrameProfiler.Begin(LiveFrameProfiler.LightingGroup);
             AlterUpdate_GlobalLight(camSheet, _currentFrame);
             AlterUpdate_EnvironmentMirror(camSheet, _currentFrame);
             AlterUpdate_MirrorReflection(camSheet, _currentFrame);
@@ -324,30 +351,59 @@ namespace Gallop.Live.Cutt
             AlterUpdate_PostEffect_BloomDiffusion(camSheet, Mathf.RoundToInt(_currentFrame));
 
             AlterUpdate_BgColor1(camSheet, _currentFrame);
+            LiveFrameProfiler.End(LiveFrameProfiler.LightingGroup);
+
             _laserRuntimeIndexOffset = 0;
             int wsCount = data.worksheetList.Count;
+            LiveFrameProfiler.Begin(LiveFrameProfiler.WorksheetLoop);
             for (int w = 0; w < wsCount; w++)
             {
                 var ws = data.worksheetList[w];
                 if (ws == null) continue;
 
+                LiveFrameProfiler.Begin(LiveFrameProfiler.WsTransformObject);
                 AlterUpdate_TransformControl(ws, _currentFrame);
                 AlterUpdate_ObjectControl(ws, _currentFrame);
+                LiveFrameProfiler.End(LiveFrameProfiler.WsTransformObject);
+
+                LiveFrameProfiler.Begin(LiveFrameProfiler.WsMobCyalume);
                 AlterUpdate_MobControl(ws, _currentFrame);
                 AlterUpdate_CyalumeControl(ws, _currentFrame);
+                LiveFrameProfiler.End(LiveFrameProfiler.WsMobCyalume);
+
+                LiveFrameProfiler.Begin(LiveFrameProfiler.WsBlinkWash);
                 AlterUpdate_BlinkLight(ws, _currentFrame);
                 AlterUpdate_WashLight(ws, _currentFrame);
+                LiveFrameProfiler.End(LiveFrameProfiler.WsBlinkWash);
+
+                LiveFrameProfiler.Begin(LiveFrameProfiler.WsLaserUv);
                 AlterUpdate_Laser(ws, _currentFrame);
                 AlterUpdate_UVScrollLight(ws, _currentFrame);
+                LiveFrameProfiler.End(LiveFrameProfiler.WsLaserUv);
+
+                LiveFrameProfiler.Begin(LiveFrameProfiler.WsAnimProps);
                 // 补充调用被遗漏的时间轴动画控制轨道驱动，使舞台动画数据能够被正常读取和派发
                 AlterUpdate_AnimationControl(ws, Mathf.RoundToInt(_currentFrame));
+                // 驱动道具属性、显隐与动画采样
+                AlterUpdate_PropsControl(ws, _currentFrame, currentLiveTime);
+                // 在骨骼姿态解算完成后，二次对齐挂载道具姿态，消除帧延迟
+                AlterUpdate_PropsAttachControl(ws, _currentFrame);
+                LiveFrameProfiler.End(LiveFrameProfiler.WsAnimProps);
             }
+            LiveFrameProfiler.End(LiveFrameProfiler.WorksheetLoop);
 
             //BgColor2属于全局舞台颜色控制，只使用主 worksheet。
             //不遍历所有 worksheet,避免同名LaserA/LaserB轨道在同一帧互相覆盖。
+            LiveFrameProfiler.Begin(LiveFrameProfiler.BgColor2);
             AlterUpdate_BgColor2(camSheet, _currentFrame);
+            LiveFrameProfiler.End(LiveFrameProfiler.BgColor2);
+
+            // 多机位已在上面 AlterUpdate_CameraRoll 之后调度过一次。
+            // 这里再调一次读的是同一个 _currentFrame，结果完全相同，属于纯重复计算，故移除。
 
             _isNowAlterUpdate = false;
+
+            LiveFrameProfiler.End(LiveFrameProfiler.AlterLateUpdate);
 
             if (IsRecordVMD)
             {

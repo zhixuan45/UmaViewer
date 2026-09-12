@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -203,6 +203,10 @@ namespace Gallop.Live
             public WashLightController washLightController;
             public UnityLensFlareController unityLensFlareController;
             public Material material;
+
+            // 实例化后的材质槽缓存。renderer.materials 每次访问都会克隆一整份 Material[]，
+            // 而实例化材质在首次访问后就固定不变，所以建缓存时取一次即可。
+            public Material[] cachedInstanceMaterials;
 
             public bool isWashLight;
             public bool isWashLightProjection;
@@ -636,6 +640,7 @@ namespace Gallop.Live
                     var wash = go.GetComponent<WashLightController>();
                     var flare = go.GetComponent<UnityLensFlareController>();
                     var runtimeMat = r.material;
+                    var instanceMats = r.materials;
                     var mats = r.sharedMaterials;
                     pendingRenderers.Add(new RendererEntry
                     {
@@ -656,6 +661,7 @@ namespace Gallop.Live
                         washLightController = wash,
                         unityLensFlareController = flare,
                         material = runtimeMat,
+                        cachedInstanceMaterials = instanceMats,
                         isWashLight = false,
                         isWashLightProjection = false,
                         useLightBlendMode = false,
@@ -1387,7 +1393,14 @@ namespace Gallop.Live
             // if (e.blendConfigured && e.blendConfiguredMode == modeId)
             //     return;
 
-            var mats = r.materials;
+            // 这个方法每帧都会被调用（blend 模式必须每帧重申）。此前每帧访问 r.materials，
+            // 等于每帧、每个 Renderer 克隆一份 Material[] —— 这是明确的托管分配热点。
+            // 实例化材质在 BuildRootCache 里已经取过一次且之后不再变化，直接用缓存；
+            // 缓存缺失时才回退到 r.materials，保证行为不变。
+            Material[] mats = e.cachedInstanceMaterials;
+            if (mats == null || mats.Length == 0)
+                mats = r.materials;
+
             if (mats == null || mats.Length == 0)
                 return;
 

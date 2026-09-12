@@ -137,13 +137,19 @@ namespace Gallop.Live
 
         private void TrySetupLaserObject(LiveTimelineControl ctl)
         {
+            // 核心状态锁加固：若已完成设置且为同一时间轴控制器，立即拦截，严禁穿透重入
+            if (_laserSetupDone && _laserSetupTimelineControl == ctl)
+                return;
+
             if (ctl == null || ctl.data == null)
                 return;
 
+            // 预先加锁并锁定当前时间轴控制器引用，杜绝重入与并发穿透
+            _laserSetupDone = true;
+            _laserSetupTimelineControl = ctl;
+
             SetupLaserObject(ctl.data);
 
-            // 无论当前舞台是否有 Laser，尝试设置完毕后均标记为完成，杜绝每帧重复调用刷屏
-            _laserSetupDone = true;
             if (_laserControllerArray != null && _laserControllerArray.Length > 0)
             {
                 Debug.Log("[StageController] Laser setup done. count=" + _laserControllerArray.Length);
@@ -264,12 +270,14 @@ namespace Gallop.Live
 
             _laserControllerArray = result.ToArray();
 
-            // Laser 在 Awake 之后动态实例化，必须重新建立 BgColor2 的
-            // Renderer/Material 绑定，否则 LaserA、LaserB 等颜色轨不会生效。
-            PopulateLaserMaterialsFromRuntimeIfNeeded();
-            RebuildBgColorCache();
-
-            Debug.Log("[StageController] SetupLaserObject complete. count=" + _laserControllerArray.Length);
+            // 核心性能治理：仅当真正实例化出 Laser 对象时，才执行动态材质扫描与 RebuildBgColorCache，
+            // 杜绝无激光场景（如 1157）全场景材质无谓扫描与 GC/IO 开销；仅在成功初始化时输出单次日志
+            if (_laserControllerArray != null && _laserControllerArray.Length > 0)
+            {
+                PopulateLaserMaterialsFromRuntimeIfNeeded();
+                RebuildBgColorCache();
+                Debug.Log("[StageController] SetupLaserObject complete. count=" + _laserControllerArray.Length);
+            }
         }
 
         private Material ResolveLaserSourceMaterial(int timelineMaterialIndex)

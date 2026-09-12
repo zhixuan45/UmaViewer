@@ -143,14 +143,19 @@ public class UmaViewerGlobalShader : MonoBehaviour
 
     private void FixedUpdate()
     {
-        //Used to calculate the correct outline
-        //Outline need more adjust in live
-        var umaContainer = UmaViewerBuilder.Instance.CurrentUMAContainer;
+        // 用于动态计算描边粗细（轮廓在 Live 演出或相机缩放时自动适配）
+        // 防御性保护：构建器单例尚未就绪时优雅退出，杜绝空引用崩溃
+        var builder = UmaViewerBuilder.Instance;
+        if (builder == null) return;
+
+        var umaContainer = builder.CurrentUMAContainer;
         if (umaContainer != null && umaContainer.UpBodyBone)
         {
             var upBone = umaContainer.UpBodyBone;
-            var aniCamera = UmaViewerBuilder.Instance.AnimationCamera;
-            var camera = aniCamera.enabled ? aniCamera : Camera.main;
+            var aniCamera = builder.AnimationCamera;
+            var camera = (aniCamera != null && aniCamera.enabled) ? aniCamera : Camera.main;
+            if (camera == null) return;
+
             var distance = Vector3.Distance(camera.transform.position, upBone.transform.position);
             var outlineWidth = (umaContainer.IsMini ? 20f : 40.0f) * (distance * Mathf.Tan(camera.fieldOfView * 0.5f * Mathf.Deg2Rad));
             Shader.SetGlobalFloat("_GlobalCameraFov", outlineWidth);
@@ -159,7 +164,6 @@ public class UmaViewerGlobalShader : MonoBehaviour
         {
             Shader.SetGlobalFloat("_GlobalCameraFov", 30);
         }
-       
     }
 
    

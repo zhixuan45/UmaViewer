@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -56,19 +56,35 @@ namespace Gallop.Live.Cutt
             _liveParentTransform = position.parent;
             _liveCharaInitialPosition = position.position;
 
+            float bodyScale = UmaContainer != null ? UmaContainer.BodyScale : 1.0f;
             if (head != null)
             {
-                HeadHeght = (position.InverseTransformPoint(head.position).y + 0.1f) * UmaContainer.BodyScale;
+                HeadHeght = (position.InverseTransformPoint(head.position).y + 0.1f) * bodyScale;
+            }
+            else
+            {
+                // 头部默认高度保底（约 1.45m），杜绝返回 0 导致镜头跌落地面以下
+                HeadHeght = 1.45f * bodyScale;
             }
 
             if (waist != null)
             {
-                WaistHeght = position.InverseTransformPoint(waist.position).y * UmaContainer.BodyScale;
+                WaistHeght = position.InverseTransformPoint(waist.position).y * bodyScale;
+            }
+            else
+            {
+                // 腰部默认高度保底（约 0.8m）
+                WaistHeght = 0.8f * bodyScale;
             }
 
             if (chest != null)
             {
-                ChestHeght = position.InverseTransformPoint(chest.position).y * UmaContainer.BodyScale;
+                ChestHeght = position.InverseTransformPoint(chest.position).y * bodyScale;
+            }
+            else
+            {
+                // 胸部默认高度保底（约 1.05m）
+                ChestHeght = 1.05f * bodyScale;
             }
 
             Debug.Log($"InfoChara {UmaContainer.CharaEntry.Name}: {HeadHeght}, {WaistHeght}, {ChestHeght}");
@@ -76,9 +92,52 @@ namespace Gallop.Live.Cutt
 
         private Transform GetBone(string name)
         {
-            if (Bones != null && Bones.TryGetValue(name, out Transform bone))
+            if (string.IsNullOrEmpty(name)) return null;
+
+            if (Bones != null)
             {
-                return bone;
+                if (Bones.TryGetValue(name, out Transform bone) && bone != null)
+                {
+                    return bone;
+                }
+
+                // 针对高频关键骨骼节点的别名与层级容错回退机制
+                string[] fallbacks = null;
+                if (name.Equals("Chest", StringComparison.OrdinalIgnoreCase))
+                {
+                    fallbacks = new string[] { "Chest_Attach", "Spine2", "Spine1", "Spine", "UpperBody" };
+                }
+                else if (name.Equals("Waist", StringComparison.OrdinalIgnoreCase))
+                {
+                    fallbacks = new string[] { "Waist_Attach", "Pelvis", "Hip", "Spine" };
+                }
+                else if (name.Equals("Head", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (UmaContainer != null && UmaContainer.HeadBone != null)
+                    {
+                        return UmaContainer.HeadBone.transform;
+                    }
+                    fallbacks = new string[] { "Head_Attach", "Neck" };
+                }
+                else if (name.Equals("Wrist_L", StringComparison.OrdinalIgnoreCase))
+                {
+                    fallbacks = new string[] { "Hand_Attach_L", "Hand_L", "Forearm_L" };
+                }
+                else if (name.Equals("Wrist_R", StringComparison.OrdinalIgnoreCase))
+                {
+                    fallbacks = new string[] { "Hand_Attach_R", "Hand_R", "Forearm_R" };
+                }
+
+                if (fallbacks != null)
+                {
+                    for (int f = 0; f < fallbacks.Length; f++)
+                    {
+                        if (Bones.TryGetValue(fallbacks[f], out Transform fbBone) && fbBone != null)
+                        {
+                            return fbBone;
+                        }
+                    }
+                }
             }
 
             return null;
@@ -129,7 +188,18 @@ namespace Gallop.Live.Cutt
 
         public Vector3 liveCharaInitialPosition
         {
-            get => _liveCharaInitialPosition;
+            get
+            {
+                if (_liveCharaInitialPosition == Vector3.zero)
+                {
+                    Transform t = PositionTransform;
+                    if (t != null && t.position != Vector3.zero)
+                    {
+                        return t.position;
+                    }
+                }
+                return _liveCharaInitialPosition;
+            }
             set => _liveCharaInitialPosition = value;
         }
 
@@ -168,11 +238,29 @@ namespace Gallop.Live.Cutt
                     return UmaContainer.HeadBone.transform.position + new Vector3(0, 0.1f, 0);
                 }
 
-                return GetBonePosition("Head") + new Vector3(0, 0.1f, 0);
+                Vector3 headPos = GetBonePosition("Head");
+                if (Mathf.Abs(headPos.y - liveCharaPosition.y) < 0.05f)
+                {
+                    float fallbackHeight = HeadHeght > 0.1f ? HeadHeght : 1.45f * (UmaContainer != null ? UmaContainer.BodyScale : 1f);
+                    headPos.y = liveCharaPosition.y + fallbackHeight;
+                }
+                return headPos + new Vector3(0, 0.1f, 0);
             }
         }
 
-        public Vector3 liveCharaWaistPosition => GetBonePosition("Waist");
+        public Vector3 liveCharaWaistPosition
+        {
+            get
+            {
+                Vector3 pos = GetBonePosition("Waist");
+                if (Mathf.Abs(pos.y - liveCharaPosition.y) < 0.05f)
+                {
+                    float fallbackHeight = WaistHeght > 0.1f ? WaistHeght : 0.8f * (UmaContainer != null ? UmaContainer.BodyScale : 1f);
+                    pos.y = liveCharaPosition.y + fallbackHeight;
+                }
+                return pos;
+            }
+        }
 
         public Vector3 liveCharaLeftHandWristPosition => GetBonePosition("Wrist_L");
 
@@ -182,7 +270,19 @@ namespace Gallop.Live.Cutt
 
         public Vector3 liveCharaRightHandWristPosition => GetBonePosition("Wrist_R");
 
-        public Vector3 liveCharaChestPosition => GetBonePosition("Chest");
+        public Vector3 liveCharaChestPosition
+        {
+            get
+            {
+                Vector3 pos = GetBonePosition("Chest");
+                if (Mathf.Abs(pos.y - liveCharaPosition.y) < 0.05f)
+                {
+                    float fallbackHeight = ChestHeght > 0.1f ? ChestHeght : 1.05f * (UmaContainer != null ? UmaContainer.BodyScale : 1f);
+                    pos.y = liveCharaPosition.y + fallbackHeight;
+                }
+                return pos;
+            }
+        }
 
         public Vector3 liveCharaFootPosition
         {
@@ -193,23 +293,24 @@ namespace Gallop.Live.Cutt
             }
         }
 
+        // 核心修复：基准水平坐标必须跟随角色的当前位置 liveCharaPosition.x 与 .z，杜绝锁死在零点导致相机水平坐标跑偏数米
         public Vector3 liveCharaConstHeightHeadPosition =>
-            new Vector3(liveCharaInitialPosition.x, HeadHeght, liveCharaInitialPosition.z);
+            new Vector3(liveCharaPosition.x, HeadHeght > 0.1f ? HeadHeght : 1.45f, liveCharaPosition.z);
 
         public Vector3 liveCharaConstHeightWaistPosition =>
-            new Vector3(liveCharaInitialPosition.x, WaistHeght, liveCharaInitialPosition.z);
+            new Vector3(liveCharaPosition.x, WaistHeght > 0.1f ? WaistHeght : 0.8f, liveCharaPosition.z);
 
         public Vector3 liveCharaConstHeightChestPosition =>
-            new Vector3(liveCharaInitialPosition.x, ChestHeght, liveCharaInitialPosition.z);
+            new Vector3(liveCharaPosition.x, ChestHeght > 0.1f ? ChestHeght : 1.05f, liveCharaPosition.z);
 
         public Vector3 liveCharaInitialHeightHeadPosition =>
-            new Vector3(liveCharaInitialPosition.x, HeadHeght, liveCharaInitialPosition.z);
+            new Vector3(liveCharaPosition.x, HeadHeght > 0.1f ? HeadHeght : 1.45f, liveCharaPosition.z);
 
         public Vector3 liveCharaInitialHeightWaistPosition =>
-            new Vector3(liveCharaInitialPosition.x, WaistHeght, liveCharaInitialPosition.z);
+            new Vector3(liveCharaPosition.x, WaistHeght > 0.1f ? WaistHeght : 0.8f, liveCharaPosition.z);
 
         public Vector3 liveCharaInitialHeightChestPosition =>
-            new Vector3(liveCharaInitialPosition.x, ChestHeght, liveCharaInitialPosition.z);
+            new Vector3(liveCharaPosition.x, ChestHeght > 0.1f ? ChestHeght : 1.05f, liveCharaPosition.z);
 
         public Vector3 liveCharaScale
         {

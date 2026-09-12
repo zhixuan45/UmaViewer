@@ -32,15 +32,25 @@ namespace Gallop.Live.Cutt
         {
             try
             {
-                // 1. 遍历 Director.instance.charaObjs 为角色挂载 Animation 组件，并进行组件健全性断言
+                // 1. 遍历 Director.instance.charaObjs 为角色挂载 Animation 组件，截断至当前 Live 实际允许站位数 targetCount
                 if (Director.instance != null && Director.instance.charaObjs != null)
                 {
                     if (Director.instance.charaAnims == null)
                     {
                         Director.instance.charaAnims = new List<Animation>();
                     }
+                    else
+                    {
+                        // 预先清空旧动画组件引用，彻底消除多余残留
+                        Director.instance.charaAnims.Clear();
+                    }
 
-                    for (int i = 0; i < Director.instance.charaObjs.Count; i++)
+                    // 截断循环上限为 targetCount，杜绝遍历到未初始化的 11~19 号空站位导致 9 处容器丢失报错
+                    int targetCount = Director.instance.allowCount > 0
+                        ? Mathf.Min(Director.instance.charaObjs.Count, Director.instance.allowCount)
+                        : Director.instance.charaObjs.Count;
+
+                    for (int i = 0; i < targetCount; i++)
                     {
                         try
                         {
@@ -84,7 +94,21 @@ namespace Gallop.Live.Cutt
                     UmaErrorManager.ShowUIMessage("[Live错误] 角色列表为空，无法初始化动作组件", UIMessageType.Error);
                 }
 
-                // 2. 获取并构建动作关键帧序列数组 _keyArray，添加边界与空引用防御
+                // 2. 获取并构建动作关键帧序列数组 _keyArray，触发批量动作动态解析绑定
+                int musicId = Director.instance != null && Director.instance.live != null ? Director.instance.live.MusicId : 0;
+                if (data != null && data.worksheetList != null)
+                {
+                    for (int i = 0; i < data.worksheetList.Count; i++)
+                    {
+                        var ws = data.worksheetList[i];
+                        if (ws != null)
+                        {
+                            // 遍历工作表，批量预解析并注入缺失的 AnimationClip
+                            ws.ResolveCharaMotions(musicId);
+                        }
+                    }
+                }
+
                 int listCount = 0;
                 if (data != null && data.worksheetList != null && data.worksheetList.Count > 0 && data.worksheetList[0].charaMotSeqList != null)
                 {

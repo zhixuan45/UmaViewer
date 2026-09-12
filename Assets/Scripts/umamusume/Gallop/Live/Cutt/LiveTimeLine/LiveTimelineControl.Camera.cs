@@ -49,8 +49,8 @@ namespace Gallop.Live.Cutt
             Vector3 tmpPos = Vector3.zero;
             if (posFlags == 0)
             {
-                retPos = liveStageCenterPos;
-                tmpPos = liveStageCenterPos;
+                retPos = liveStageCenterPos + charaPos;
+                tmpPos = liveStageCenterPos + charaPos;
             }
             else
             {
@@ -63,7 +63,12 @@ namespace Gallop.Live.Cutt
                             {
                                 if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                                 {
-                                    retPos += liveCharactorLocators[i].liveCharaHeadPosition;
+                                    Vector3 headPos = liveCharactorLocators[i].liveCharaHeadPosition;
+                                    if (headPos.sqrMagnitude < 0.01f || (Mathf.Abs(headPos.x) < 0.01f && Mathf.Abs(headPos.z) < 0.01f))
+                                    {
+                                        headPos += charaPos;
+                                    }
+                                    retPos += headPos;
                                     retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
                                     num++;
                                 }
@@ -76,7 +81,12 @@ namespace Gallop.Live.Cutt
                             {
                                 if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                                 {
-                                    retPos += liveCharactorLocators[i].liveCharaWaistPosition;
+                                    Vector3 waistPos = liveCharactorLocators[i].liveCharaWaistPosition;
+                                    if (waistPos.sqrMagnitude < 0.01f || (Mathf.Abs(waistPos.x) < 0.01f && Mathf.Abs(waistPos.z) < 0.01f))
+                                    {
+                                        waistPos += charaPos;
+                                    }
+                                    retPos += waistPos;
                                     retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
                                     num++;
                                 }
@@ -141,7 +151,12 @@ namespace Gallop.Live.Cutt
                             {
                                 if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                                 {
-                                    retPos += liveCharactorLocators[i].liveCharaChestPosition;
+                                    Vector3 chestPos = liveCharactorLocators[i].liveCharaChestPosition;
+                                    if (chestPos.sqrMagnitude < 0.01f || (Mathf.Abs(chestPos.x) < 0.01f && Mathf.Abs(chestPos.z) < 0.01f))
+                                    {
+                                        chestPos += charaPos;
+                                    }
+                                    retPos += chestPos;
                                     retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
                                     num++;
                                 }
@@ -219,20 +234,17 @@ namespace Gallop.Live.Cutt
                         }
                     case LiveCameraCharaParts.InitFaceHeight:
                         {
+                            // 核心修复：对齐官方原版反编译实现，直接获取角色头部骨骼世界坐标，并在骨骼尚未就绪时以 charaPos 作为补偿
                             for (int i = 0; i < liveCharaPositionMax; i++)
                             {
                                 if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                                 {
-                                    /*
-                                    retPos += liveCharactorLocators[i].liveCharaHeadPosition;
-                                    tmpPos += liveCharactorLocators[i].liveCharaConstHeightHeadPosition;
-                                    Vector3 vector3 = cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += vector3;
-                                    tmpPos += vector3;
-                                    num++;
-                                    */
-
-                                    retPos += liveCharactorLocators[i].liveCharaInitialHeightHeadPosition;
+                                    Vector3 headPos = liveCharactorLocators[i].liveCharaHeadPosition;
+                                    if (headPos.sqrMagnitude < 0.01f || (Mathf.Abs(headPos.x) < 0.01f && Mathf.Abs(headPos.z) < 0.01f))
+                                    {
+                                        headPos += charaPos;
+                                    }
+                                    retPos += headPos;
                                     retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
                                     num++;
                                 }
@@ -245,16 +257,12 @@ namespace Gallop.Live.Cutt
                             {
                                 if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                                 {
-                                    /*
-                                    retPos += liveCharactorLocators[i].liveCharaChestPosition;
-                                    tmpPos += liveCharactorLocators[i].liveCharaConstHeightChestPosition;
-                                    Vector3 vector2 = cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += vector2;
-                                    tmpPos += vector2;
-                                    num++;
-                                    */
-
-                                    retPos += liveCharactorLocators[i].liveCharaInitialHeightChestPosition;
+                                    Vector3 chestPos = liveCharactorLocators[i].liveCharaChestPosition;
+                                    if (chestPos.sqrMagnitude < 0.01f || (Mathf.Abs(chestPos.x) < 0.01f && Mathf.Abs(chestPos.z) < 0.01f))
+                                    {
+                                        chestPos += charaPos;
+                                    }
+                                    retPos += chestPos;
                                     retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
                                     num++;
                                 }
@@ -267,16 +275,12 @@ namespace Gallop.Live.Cutt
                             {
                                 if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
                                 {
-                                    /*
-                                    retPos += liveCharactorLocators[i].liveCharaWaistPosition;
-                                    tmpPos += liveCharactorLocators[i].liveCharaConstHeightWaistPosition;
-                                    Vector3 vector = cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += vector;
-                                    tmpPos += vector;
-                                    num++;
-                                    */
-
-                                    retPos += liveCharactorLocators[i].liveCharaInitialHeightWaistPosition;
+                                    Vector3 waistPos = liveCharactorLocators[i].liveCharaWaistPosition;
+                                    if (waistPos.sqrMagnitude < 0.01f || (Mathf.Abs(waistPos.x) < 0.01f && Mathf.Abs(waistPos.z) < 0.01f))
+                                    {
+                                        waistPos += charaPos;
+                                    }
+                                    retPos += waistPos;
                                     retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
                                     num++;
                                 }
@@ -284,10 +288,14 @@ namespace Gallop.Live.Cutt
                             break;
                         }
                 }
-                bool flag = num > 1;
-                if (flag)
+                if (num > 1)
                 {
                     retPos /= (float)num;
+                }
+                else if (num == 0)
+                {
+                    // 若未命中任何有效角色定位器，安全回退至舞台中心叠加关键帧站位，杜绝归零导致镜头跌入虚空
+                    retPos = liveStageCenterPos + charaPos;
                 }
                 /*
                 if ((uint)(parts - 11) <= 2u)
@@ -732,159 +740,6 @@ namespace Gallop.Live.Cutt
                 }
             }
         }
-
-        private static Vector3 GetMultiCameraPositionValue(LiveTimelineKeyCameraPositionData keyData, LiveTimelineControl timelineControl, FindTimelineConfig config)
-        {
-            return (keyData as LiveTimelineKeyMultiCameraPositionData).GetValue(timelineControl);
-        }
-
-        public bool CalculateMultiCameraPos(out Vector3 pos, LiveTimelineWorkSheet sheet, LiveTimelineKey curKey, LiveTimelineKey nextKey, float currentFrame, int timelineIndex)
-        {
-            if (sheet.multiCameraPosKeys.Count <= timelineIndex)
-            {
-                pos = Vector3.zero;
-                return false;
-            }
-            FindTimelineConfig config = default(FindTimelineConfig);
-            config.curKey = curKey;
-            config.nextKey = nextKey;
-            config.keyType = FindTimelineConfig.KeyType.KeyDirect;
-            config.posKeys = sheet.multiCameraPosKeys[timelineIndex].keys;
-            config.lookAtKeys = null;
-            config.extraCameraIndex = timelineIndex;
-            return CalculateCameraPos(out pos, sheet, currentFrame, _multiCameraCache[timelineIndex], ref config, ref fnGetMultiCameraPositionValueFunc);
-        }
-
-        private void AlterUpdate_MultiCameraPosition(LiveTimelineWorkSheet sheet, float currentFrame)
-        {
-            int count = sheet.multiCameraPosKeys.Count;
-            for (int i = 0; i < count; i++)
-            {
-                LiveTimelineKeyMultiCameraPositionDataList keys = sheet.multiCameraPosKeys[i].keys;
-                if (keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode) || i >= _multiCameraCache.Length)
-                {
-                    continue;
-                }
-                LiveTimelineKey curKey = null;
-                LiveTimelineKey nextKey = null;
-                FindTimelineKey(out curKey, out nextKey, keys, currentFrame);
-                if (!CalculateMultiCameraPos(out var pos, sheet, curKey, nextKey, currentFrame, i))
-                {
-                    continue;
-                }
-                CacheCamera cacheCamera = _multiCameraCache[i];
-                Camera camera = cacheCamera.camera;
-                if (curKey == null)
-                {
-                    continue;
-                }
-                LiveTimelineKeyMultiCameraPositionData liveTimelineKeyMultiCameraPositionData = curKey as LiveTimelineKeyMultiCameraPositionData;
-                LiveTimelineKeyMultiCameraPositionData liveTimelineKeyMultiCameraPositionData2 = nextKey as LiveTimelineKeyMultiCameraPositionData;
-                // camera.enabled = liveTimelineKeyMultiCameraPositionData.enableMultiCamera;
-                if (liveTimelineKeyMultiCameraPositionData.enableMultiCamera)
-                {
-
-                    _isMultiCameraEnable = true;
-                    //camera.cullingMask = 0x10000000 | liveTimelineKeyMultiCameraPositionData.GetCullingMask();
-
-                    float zAngle;
-                    float fieldOfView;
-                    Vector3 maskOffset;
-                    float maskRoll;
-                    if (liveTimelineKeyMultiCameraPositionData2 != null && liveTimelineKeyMultiCameraPositionData2.interpolateType != 0)
-                    {
-                        float t = CalculateInterpolationValue(liveTimelineKeyMultiCameraPositionData, liveTimelineKeyMultiCameraPositionData2, currentFrame);
-                        fieldOfView = LerpWithoutClamp(liveTimelineKeyMultiCameraPositionData.fov, liveTimelineKeyMultiCameraPositionData2.fov, t);
-                        maskOffset = LerpWithoutClamp(liveTimelineKeyMultiCameraPositionData.maskOffset, liveTimelineKeyMultiCameraPositionData2.maskOffset, t);
-                        maskRoll = LerpWithoutClamp(liveTimelineKeyMultiCameraPositionData.maskRoll, liveTimelineKeyMultiCameraPositionData2.maskRoll, t);
-                        zAngle = LerpWithoutClamp(liveTimelineKeyMultiCameraPositionData.roll, liveTimelineKeyMultiCameraPositionData2.roll, t);
-                    }
-                    else
-                    {
-                        fieldOfView = liveTimelineKeyMultiCameraPositionData.fov;
-                        maskOffset = liveTimelineKeyMultiCameraPositionData.maskOffset;
-                        maskRoll = liveTimelineKeyMultiCameraPositionData.maskRoll;
-                        zAngle = liveTimelineKeyMultiCameraPositionData.roll;
-                    }
-
-
-
-                    camera.nearClipPlane = liveTimelineKeyMultiCameraPositionData.nearClip;
-                    camera.farClipPlane = liveTimelineKeyMultiCameraPositionData.farClip;
-                    camera.fieldOfView = fieldOfView;
-                    cacheCamera.cacheTransform.localPosition = pos;
-                    cacheCamera.cacheTransform.Rotate(0f, 0f, zAngle);
-                    if (_multiCamera[i].maskIndex != (int)liveTimelineKeyMultiCameraPositionData.maskType)
-                    {
-                        //_multiCameraManager.AttachMask(i, (int)liveTimelineKeyMultiCameraPositionData.maskType);
-                    }
-
-                    if (_multiCamera[i].maskIndex >= 0)
-                    {
-                        _multiCamera[i].MaskOffset = maskOffset;
-                        _multiCamera[i].MaskRoll = maskRoll;
-                        //_multiCamera[i].maskScale = maskScale;
-                    }
-                }
-            }
-        }
-
-        private static Vector3 GetMultiCameraLookAtValue(LiveTimelineKeyCameraLookAtData keyData, LiveTimelineControl timelineControl, Vector3 camPos, FindTimelineConfig config)
-        {
-            return (keyData as LiveTimelineKeyMultiCameraLookAtData).GetValue(timelineControl, camPos);
-        }
-
-        public bool CalculateMultiCameraLookAt(out Vector3 pos, LiveTimelineWorkSheet sheet, LiveTimelineKey curKey, LiveTimelineKey nextKey, float currentFrame, int timelineIndex = 0)
-        {
-            if (sheet.multiCameraPosKeys.Count <= timelineIndex || sheet.multiCameraLookAtKeys.Count <= timelineIndex)
-            {
-                pos = Vector3.zero;
-                return false;
-            }
-            FindTimelineConfig config = default(FindTimelineConfig);
-            config.curKey = curKey;
-            config.nextKey = nextKey;
-            config.keyType = FindTimelineConfig.KeyType.KeyDirect;
-            config.posKeys = sheet.multiCameraPosKeys[timelineIndex].keys;
-            config.lookAtKeys = sheet.multiCameraLookAtKeys[timelineIndex].keys;
-            config.extraCameraIndex = timelineIndex;
-            return CalculateCameraLookAt(out pos, sheet, currentFrame, _multiCameraCache[timelineIndex], ref config, ref fnGetMultiCameraLookAtValueFunc, ref fnGetMultiCameraPositionValueFunc);
-        }
-
-
-        private void AlterUpdate_MultiCameraLookAt(LiveTimelineWorkSheet sheet, float currentFrame)
-        {
-            int count = sheet.multiCameraLookAtKeys.Count;
-            for (int i = 0; i < count; i++)
-            {
-                LiveTimelineKeyMultiCameraLookAtDataList keys = sheet.multiCameraLookAtKeys[i].keys;
-                if (i >= _multiCameraCache.Length)
-                {
-                    break;
-                }
-                if (keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode))
-                {
-                    continue;
-                }
-                FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
-                if (curKey != null && CalculateMultiCameraLookAt(out var pos, sheet, curKey, nextKey, currentFrame, i))
-                {
-                    Transform cacheTransform = _multiCameraCache[i].cacheTransform;
-                    cacheTransform.LookAt(pos);
-                }
-            }
-        }
-
-        private void AlterUpdate_MultiCamera(LiveTimelineWorkSheet sheet, float currentFrame)
-        {
-            //if (_multiCameraCache != null && !(_multiCameraManager == null) && _multiCameraManager.isInitialize)
-            if (_multiCameraCache != null)
-            {
-                AlterUpdate_MultiCameraPosition(sheet, currentFrame);
-                if (_isMultiCameraEnable)
-                    AlterUpdate_MultiCameraLookAt(sheet, currentFrame);
-            }
-        }
-
     }
 }
+

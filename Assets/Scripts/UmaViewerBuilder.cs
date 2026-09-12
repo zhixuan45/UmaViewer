@@ -17,7 +17,22 @@ using Random = UnityEngine.Random;
 
 public partial class UmaViewerBuilder : MonoBehaviour
 {
-    public static UmaViewerBuilder Instance;
+    private static UmaViewerBuilder _instance;
+    /// <summary>
+    /// 全局构建器单例。支持在 Unity 域重载后静态数据丢失时自动从场景找回活跃实例自愈。
+    /// </summary>
+    public static UmaViewerBuilder Instance
+    {
+        get
+        {
+            if (_instance == null)
+            {
+                _instance = FindObjectOfType<UmaViewerBuilder>();
+            }
+            return _instance;
+        }
+        set => _instance = value;
+    }
     static UmaViewerMain Main => UmaViewerMain.Instance;
     static UmaViewerUI UI => UmaViewerUI.Instance;
     static UISettingsModel ModelSettings => UmaViewerUI.Instance.ModelSettings;
@@ -57,7 +72,15 @@ public string[] NormalBodyKeywords  = new[] { "skin", "body", "bdy", "face", "he
 
     private void Awake()
     {
-        Instance = this;
+        _instance = this;
+    }
+
+    private void OnDestroy()
+    {
+        if (_instance == this)
+        {
+            _instance = null;
+        }
     }
 
     public IEnumerator LoadUma(CharaEntry chara, string costumeId, bool mini, string haedCostumeId = "")

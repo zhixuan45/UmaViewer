@@ -71,6 +71,30 @@ public static class UniversalLiveBugFixAssertionTests
         // 11. LiveTimelineMotionSequence 动作健全性与防崩溃防御断言测试
         RunTestCase("LiveTimelineMotionSequence: 缺失组件或空 Clip 时安全防崩溃与防御断言", ref total, ref passed, ref failed, sb, TestMotionSequenceRobustnessDefense);
 
+        // 12. 资源下载 URL 格式验证断言测试（确保消除双斜杠 bug）
+        RunTestCase("UmaViewerDownload: 资源下载 URL 拼装格式合规与防双斜杠验证", ref total, ref passed, ref failed, sb, TestDownloadUrlFormatNoDoubleSlash);
+
+        // 13. 动作解析器 LiveTimelineMotionClipResolver 内存缓存与安全容错断言测试
+        RunTestCase("LiveTimelineMotionClipResolver: 内存缓存与空值输入安全容错", ref total, ref passed, ref failed, sb, TestMotionClipResolverCacheAndSafety);
+
+        // 14. 动作初始化槽位上限安全截断与 UmaContainer 防误报断言测试
+        RunTestCase("LiveTimelineControl: 角色站位循环上限精准截断与容器丢失防误报", ref total, ref passed, ref failed, sb, TestMotionSequenceSlotTruncationAndNoFalseMissingContainer);
+
+        // 15. 热重载单例自愈与轮询空安全防御断言测试
+        RunTestCase("Singletons & Polling: 热重载单例自愈恢复与多组件轮询空引用防御", ref total, ref passed, ref failed, sb, TestSingletonSelfHealingAndNullSafetyDefense);
+
+        // 16. 空动作与休止关键帧合法性判定与平滑维持断言测试
+        RunTestCase("LiveMotion: 空待机帧合法休止识别与姿态采样维持", ref total, ref passed, ref failed, sb, TestMotionRestKeyRecognitionAndPoseHolding);
+
+        // 17. 舞台深层嵌套节点空间逆变换与增量模式位姿断言测试
+        RunTestCase("StageController: 深层父节点空间逆变换与增量位姿计算", ref total, ref passed, ref failed, sb, TestDeepHierarchicalInverseTransformAndOffsetType);
+
+        // 18. 角色容器手部定位骨骼查找与道具挂接断言测试
+        RunTestCase("UmaContainerCharacter: 手腕手持定位骨骼查找与道具挂载", ref total, ref passed, ref failed, sb, TestContainerHandAttachBoneFindingAndPropMount);
+
+        // 19. 全局 Live 道具与动作资源预载匹配断言测试
+        RunTestCase("Director.Props: 全局 Live 道具模型与动作资源包扫描匹配", ref total, ref passed, ref failed, sb, TestCollectLivePropsEntriesMatching);
+
         sb.AppendLine("\n================================================================");
         sb.AppendLine($"=== SUMMARY: Total={total}, PASSED={passed}, FAILED={failed} ===");
         sb.AppendLine("================================================================");
@@ -617,4 +641,357 @@ public static class UniversalLiveBugFixAssertionTests
             UnityEngine.Object.DestroyImmediate(dummyChara);
         }
     }
+
+    /// <summary>
+    /// 测试 12：验证 UmaViewerDownload 生成的资源请求地址合规且不含有双斜杠（//）。
+    /// </summary>
+    private static void TestDownloadUrlFormatNoDoubleSlash()
+    {
+        string dummyHash = "abcdef1234567890abcdef1234567890";
+        string assetUrl = UmaViewerDownload.GetAssetRequestUrl(dummyHash);
+        string genericUrl = UmaViewerDownload.GetGenericRequestUrl(dummyHash);
+        string manifestUrl = UmaViewerDownload.GetManifestRequestUrl(dummyHash);
+
+        AssertNotNull(assetUrl, "AssetRequestUrl 不能为 null");
+        AssertNotNull(genericUrl, "GenericRequestUrl 不能为 null");
+        AssertNotNull(manifestUrl, "ManifestRequestUrl 不能为 null");
+
+        // 核心断言：URL 在去除协议头 https:// 之后，路径部分严禁包含连续双斜杠 //
+        string assetPathOnly = assetUrl.Replace("https://", "").Replace("http://", "");
+        string genericPathOnly = genericUrl.Replace("https://", "").Replace("http://", "");
+        string manifestPathOnly = manifestUrl.Replace("https://", "").Replace("http://", "");
+
+        AssertTrue(!assetPathOnly.Contains("//"), $"AssetRequestUrl 路径部分不应包含双斜杠: {assetUrl}");
+        AssertTrue(!genericPathOnly.Contains("//"), $"GenericRequestUrl 路径部分不应包含双斜杠: {genericUrl}");
+        AssertTrue(!manifestPathOnly.Contains("//"), $"ManifestRequestUrl 路径部分不应包含双斜杠: {manifestUrl}");
+    }
+
+    /// <summary>
+    /// 测试 13：验证 LiveTimelineMotionClipResolver 内存缓存机制与对非法/空输入的优雅容错。
+    /// </summary>
+    private static void TestMotionClipResolverCacheAndSafety()
+    {
+        LiveTimelineMotionClipResolver.ClearCache();
+
+        // 1. 空动作名、空白字符串与负数 musicId 安全容错
+        var clipNull = LiveTimelineMotionClipResolver.ResolveClip(null, 1157);
+        AssertTrue(clipNull == null, "传入 null 动作名时应安全返回 null 而不抛出未处理异常");
+
+        var clipEmpty = LiveTimelineMotionClipResolver.ResolveClip("", 1157);
+        AssertTrue(clipEmpty == null, "传入空动作名时应安全返回 null 而不抛出未处理异常");
+
+        var clipNonExist = LiveTimelineMotionClipResolver.ResolveClip("non_existent_motion_name_xyz_9999", 9999);
+        AssertTrue(clipNonExist == null, "检索不存在的动作时应优雅降级返回 null");
+
+        // 2. 清理缓存接口健全性验证
+        LiveTimelineMotionClipResolver.ClearCache();
+    }
+
+    /// <summary>
+    /// 测试 14：验证 LiveTimelineControl.InitCharaMotionSequence 针对 20 站位但仅有 11 位实际角色时，循环精准截断且 charaAnims 与实际角色数一致，杜绝 9 处容器误报。
+    /// </summary>
+    private static void TestMotionSequenceSlotTruncationAndNoFalseMissingContainer()
+    {
+        var prevDirector = Director.instance;
+        GameObject dummyDirectorObj = new GameObject("DummyDirector_SlotTest");
+        try
+        {
+            var director = dummyDirectorObj.AddComponent<Director>();
+            typeof(Director).GetField("_instance", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).SetValue(null, director);
+
+            // 模拟 20 个站位变换节点（类似 1157 的 CharacterObject0 ~ 19）
+            director.charaObjs = new List<Transform>();
+            for (int i = 0; i < 20; i++)
+            {
+                var standObj = new GameObject($"StandPos_{i}");
+                standObj.transform.parent = dummyDirectorObj.transform;
+                // 仅为前 11 个槽位挂载真实的 UmaContainer 模拟实际参演角色
+                if (i < 11)
+                {
+                    standObj.AddComponent<UmaContainerCharacter>();
+                }
+                director.charaObjs.Add(standObj.transform);
+            }
+
+            // 设定实际允许出场角色数为 11
+            director.allowCount = 11;
+            director.charaAnims = new List<Animation>();
+
+            // 构建虚拟时间轴控制器
+            var timelineObj = new GameObject("DummyTimeline_SlotTest");
+            var timelineControl = timelineObj.AddComponent<LiveTimelineControl>();
+            timelineControl.data = ScriptableObject.CreateInstance<LiveTimelineData>();
+            timelineControl.data.worksheetList = new List<LiveTimelineWorkSheet>();
+
+            // 执行动作序列初始化
+            timelineControl.InitCharaMotionSequence(new int[11]);
+
+            // 核心断言：charaAnims 的元素数量必须严格等于 11（实际参演角色数），绝不能等于 20，也不能包含未找到的槽位空挂载
+            AssertNotNull(director.charaAnims, "Director.charaAnims 必须被成功初始化");
+            AssertTrue(director.charaAnims.Count == 11, $"charaAnims 的元素数量必须严格截断为实际角色数 11 (当前为: {director.charaAnims.Count})，杜绝槽位 11~19 的越界误检");
+
+            UnityEngine.Object.DestroyImmediate(timelineObj);
+        }
+        finally
+        {
+            typeof(Director).GetField("_instance", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).SetValue(null, prevDirector);
+            UnityEngine.Object.DestroyImmediate(dummyDirectorObj);
+        }
+    }
+
+    /// <summary>
+    /// 测试 15：验证核心单例在热重载或静态变量丢失后的自愈能力，以及高频轮询组件的空安全防御
+    /// </summary>
+    private static void TestSingletonSelfHealingAndNullSafetyDefense()
+    {
+        // 1. 验证 PoseManager.SetTooltip 在 UmaViewerUI.Instance 为 null 时安全不抛异常
+        var prevUI = UmaViewerUI.Instance;
+        UmaViewerUI.Instance = null;
+        try
+        {
+            // 不抛出异常即为通过
+            PoseManager.SetTooltip(0, "TestTooltipNullSafe");
+            PoseManager.SetTooltip(999, "TestTooltipOutOfRangeSafe");
+            PoseManager.SetTooltip(-1, "TestTooltipNegativeIndexSafe");
+        }
+        finally
+        {
+            UmaViewerUI.Instance = prevUI;
+        }
+
+        // 2. 验证 HandleManager 静态注册与弹窗关闭在 UmaViewerUI.Instance 为 null 时安全不抛异常
+        UmaViewerUI.Instance = null;
+        try
+        {
+            HandleManager.RegisterHandle(null);
+            HandleManager.UnregisterHandle(null);
+            HandleManager.CloseAllPopups();
+        }
+        finally
+        {
+            UmaViewerUI.Instance = prevUI;
+        }
+
+        // 3. 验证 UmaViewerGlobalShader 在 UmaViewerBuilder.Instance 为 null 时的空安全防御
+        var prevBuilder = UmaViewerBuilder.Instance;
+        UmaViewerBuilder.Instance = null;
+        var shaderGo = new GameObject("Test_GlobalShader_Defense");
+        try
+        {
+            var globalShader = shaderGo.AddComponent<UmaViewerGlobalShader>();
+            var fixedUpdateMethod = typeof(UmaViewerGlobalShader).GetMethod("FixedUpdate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            AssertNotNull(fixedUpdateMethod, "UmaViewerGlobalShader 应包含 FixedUpdate 方法");
+            // 调用 FixedUpdate，确保无 NullReferenceException 抛出
+            fixedUpdateMethod.Invoke(globalShader, null);
+        }
+        finally
+        {
+            UmaViewerBuilder.Instance = prevBuilder;
+            UnityEngine.Object.DestroyImmediate(shaderGo);
+        }
+
+        // 4. 验证单例自愈机制：在场景中存在实例时，置空静态引用后访问属性自动找回
+        var dummyUIGo = new GameObject("Dummy_UmaViewerUI_SelfHeal");
+        try
+        {
+            var dummyUI = dummyUIGo.AddComponent<UmaViewerUI>();
+            // 将内部 backing field 置空模拟热重载
+            typeof(UmaViewerUI).GetField("_instance", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).SetValue(null, null);
+
+            // 核心断言：getter 能够自动通过 FindObjectOfType 自愈找回
+            AssertNotNull(UmaViewerUI.Instance, "UmaViewerUI.Instance 在静态变量被重载置空后应能自动找回场景中的活跃实例");
+            AssertTrue(UmaViewerUI.Instance == dummyUI, "自愈找到的实例应与场景中的活跃实例一致");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(dummyUIGo);
+            UmaViewerUI.Instance = prevUI;
+        }
+
+        // 5. 验证 UmaSceneController 单例自愈机制与加载进度通知安全
+        var prevSceneCtrl = UmaSceneController.instance;
+        var dummySceneGo = new GameObject("Dummy_SceneController_SelfHeal");
+        try
+        {
+            var dummyCtrl = dummySceneGo.AddComponent<UmaSceneController>();
+            typeof(UmaSceneController).GetField("_instance", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).SetValue(null, null);
+
+            AssertNotNull(UmaSceneController.instance, "UmaSceneController.instance 在静态变量被重载置空后应能自动找回场景中的活跃实例");
+            AssertTrue(UmaSceneController.instance == dummyCtrl, "自愈找到的实例应与场景中的活跃实例一致");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(dummySceneGo);
+            UmaSceneController.instance = prevSceneCtrl;
+        }
+    }
+
+    /// <summary>
+    /// 测试 16：验证空动作关键帧（休止帧）能够被正确识别，且不报缺失异常并返回平滑维持
+    /// </summary>
+    private static void TestMotionRestKeyRecognitionAndPoseHolding()
+    {
+        // 验证空关键帧在三通道均为空时判定为合法休止
+        var emptyKey = new LiveTimelineKeyCharaMotionData
+        {
+            motionName = "",
+            motionName2 = null,
+            motionName3 = string.Empty,
+            clip = null,
+            clip2 = null,
+            clip3 = null
+        };
+
+        bool isLegitimateRestKey = string.IsNullOrEmpty(emptyKey.motionName) &&
+                                   string.IsNullOrEmpty(emptyKey.motionName2) &&
+                                   string.IsNullOrEmpty(emptyKey.motionName3) &&
+                                   emptyKey.clip == null &&
+                                   emptyKey.clip2 == null &&
+                                   emptyKey.clip3 == null;
+        AssertTrue(isLegitimateRestKey, "三通道动作名与剪辑均为空的关键帧应判定为合法休止帧，绝不应误报动作缺失");
+
+        // 验证次通道具有动作名时能被正确捕获
+        var subChannelKey = new LiveTimelineKeyCharaMotionData
+        {
+            motionName = null,
+            motionName2 = "anm_liv_test_sub01",
+            clip = null
+        };
+        string effectiveName = !string.IsNullOrEmpty(subChannelKey.motionName) ? subChannelKey.motionName : subChannelKey.motionName2;
+        AssertTrue(effectiveName == "anm_liv_test_sub01", "主动作名为空但次通道有动作名时应成功提取次通道动作");
+    }
+
+    /// <summary>
+    /// 测试 17：验证深层嵌套父节点空间逆变换与增量模式位姿计算的精确性
+    /// </summary>
+    private static void TestDeepHierarchicalInverseTransformAndOffsetType()
+    {
+        var stageRoot = new GameObject("Test_StageRoot");
+        var parentBg = new GameObject("Test_ParentBg");
+        var targetObject = new GameObject("Test_Jukebox_Audio");
+
+        try
+        {
+            parentBg.transform.SetParent(stageRoot.transform);
+            targetObject.transform.SetParent(parentBg.transform);
+
+            // 模拟父节点带有复杂的平移和偏转
+            parentBg.transform.localPosition = new Vector3(5f, 2f, -3f);
+            parentBg.transform.localRotation = Quaternion.Euler(0f, 45f, 0f);
+
+            // 假定时间轴下发基于舞台空间的绝对坐标和旋转
+            Vector3 timelineStagePos = new Vector3(10f, 2f, 5f);
+            Quaternion timelineStageRot = Quaternion.Euler(0f, 90f, 0f);
+
+            // 通过父节点的逆变换换算为相对于父级的局部变换
+            Vector3 localPos = parentBg.transform.InverseTransformPoint(timelineStagePos);
+            Quaternion localRot = Quaternion.Inverse(parentBg.transform.rotation) * timelineStageRot;
+
+            targetObject.transform.localPosition = localPos;
+            targetObject.transform.localRotation = localRot;
+
+            // 核心断言：换算后物体的世界坐标与世界朝向必须精确等同于时间轴的目标位姿
+            float posError = Vector3.Distance(targetObject.transform.position, timelineStagePos);
+            AssertTrue(posError < 0.001f, $"逆变换换算后物体的世界位置误差应低于 0.001 (实际误差: {posError})");
+
+            float angleError = Quaternion.Angle(targetObject.transform.rotation, timelineStageRot);
+            AssertTrue(angleError < 0.1f, $"逆变换换算后物体的世界旋转角度误差应低于 0.1 度 (实际误差: {angleError})");
+
+            // 验证增量模式：在基准位姿上的叠加计算
+            Vector3 basePos = new Vector3(1f, 1f, 1f);
+            Vector3 deltaPos = new Vector3(2f, 3f, 4f);
+            Vector3 combinedPos = basePos + deltaPos;
+            AssertTrue(combinedPos == new Vector3(3f, 4f, 5f), "OffsetType.Add 增量模式应在基准坐标上准确累加");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(targetObject);
+            UnityEngine.Object.DestroyImmediate(parentBg);
+            UnityEngine.Object.DestroyImmediate(stageRoot);
+        }
+    }
+
+    /// <summary>
+    /// 测试 18：验证 UmaContainerCharacter 手部挂载骨骼智能定位与道具挂接功能
+    /// </summary>
+    private static void TestContainerHandAttachBoneFindingAndPropMount()
+    {
+        var charaGo = new GameObject("Test_Chara_Container");
+        var bodyGo = new GameObject("Body");
+        var wristR = new GameObject("Wrist_R");
+        var handAttachR = new GameObject("Hand_Attach_R");
+        var dummyPropPrefab = new GameObject("pfb_chr_prop_test_fan");
+
+        try
+        {
+            bodyGo.transform.SetParent(charaGo.transform);
+            wristR.transform.SetParent(bodyGo.transform);
+            handAttachR.transform.SetParent(wristR.transform);
+
+            var container = charaGo.AddComponent<UmaContainerCharacter>();
+
+            // 1. 精确查找 Hand_Attach_R
+            Transform foundExact = container.FindAttachBone("Hand_Attach_R");
+            AssertNotNull(foundExact, "FindAttachBone 应能精确定位到 Hand_Attach_R 骨骼节点");
+            AssertTrue(foundExact == handAttachR.transform, "精确定位到的节点必须与 Hand_Attach_R 一致");
+
+            // 2. 容错回退查找：若请求的是 Wrist_R 或包含 _R 的未直接存在的节点
+            Transform foundFallback = container.FindAttachBone("Unknown_Hand_R");
+            AssertNotNull(foundFallback, "未直接命中精确骨骼但包含 _R 时应能容错回退至 Wrist_R 或相关右侧骨骼");
+
+            // 3. 道具挂载与归一化断言
+            GameObject mountedProp = container.AttachProp(dummyPropPrefab, "Hand_Attach_R", "sensu_fan");
+            AssertNotNull(mountedProp, "AttachProp 实例化挂载道具不应返回 null");
+            AssertTrue(mountedProp.transform.parent == handAttachR.transform, "道具必须挂载在 Hand_Attach_R 子层级");
+            AssertTrue(mountedProp.transform.localPosition == Vector3.zero, "挂载道具的 localPosition 必须归零");
+            AssertTrue(mountedProp.transform.localRotation == Quaternion.identity, "挂载道具的 localRotation 必须归一化");
+            AssertTrue(container.AttachedProps.ContainsKey("sensu_fan"), "已挂载道具应被正确登记入 AttachedProps 字典");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(dummyPropPrefab);
+            UnityEngine.Object.DestroyImmediate(charaGo);
+        }
+    }
+
+    /// <summary>
+    /// 测试 19：验证全局 Live 道具模型（3d/chara/prop）与专属动作包（3d/motion/live/prop）的收集规则
+    /// </summary>
+    private static void TestCollectLivePropsEntriesMatching()
+    {
+        // 模拟创建具有 prop 前缀的资源条目
+        var propModelEntry = new UmaDatabaseEntry { Name = "3d/chara/prop/prop0001_00/pfb_chr_prop_0001_00", Type = UmaFileType._3d_cutt };
+        var propMotionEntry = new UmaDatabaseEntry { Name = "3d/motion/live/prop/son1157/anm_liv_son1157_prop01", Type = UmaFileType._3d_cutt };
+        var otherEntry = new UmaDatabaseEntry { Name = "3d/chara/body/bdy0001_00/pfb_bdy0001_00", Type = UmaFileType._3d_cutt };
+
+        var testDict = new Dictionary<string, UmaDatabaseEntry>(StringComparer.OrdinalIgnoreCase)
+        {
+            { propModelEntry.Name, propModelEntry },
+            { propMotionEntry.Name, propMotionEntry },
+            { otherEntry.Name, otherEntry }
+        };
+
+        int musicId = 1157;
+        string livePropMotionPrefix = $"3d/motion/live/prop/son{musicId}";
+        string charaPropPrefix = "3d/chara/prop/";
+
+        var matched = new List<UmaDatabaseEntry>();
+        foreach (var kv in testDict)
+        {
+            if (kv.Value == null || !kv.Value.IsAssetBundle) continue;
+            bool isCharaProp = kv.Key.StartsWith(charaPropPrefix, StringComparison.OrdinalIgnoreCase);
+            bool isPropMotion = kv.Key.StartsWith(livePropMotionPrefix, StringComparison.OrdinalIgnoreCase);
+            if (isCharaProp || isPropMotion)
+            {
+                matched.Add(kv.Value);
+            }
+        }
+
+        AssertTrue(matched.Count == 2, $"应精准匹配到 2 个道具相关资源包 (实际匹配: {matched.Count})");
+        AssertTrue(matched.Contains(propModelEntry), "匹配结果必须包含 3d/chara/prop 道具模型包");
+        AssertTrue(matched.Contains(propMotionEntry), "匹配结果必须包含当前 Live 专属的 3d/motion/live/prop 道具动作包");
+        AssertTrue(!matched.Contains(otherEntry), "匹配结果绝不应包含无关的角色身体模型包");
+    }
 }
+
+

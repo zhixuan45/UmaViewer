@@ -30,7 +30,22 @@ public class UmaAssetManager : MonoBehaviour
         }
     }
 
-    public static UmaAssetManager instance;
+    private static UmaAssetManager _instance;
+    /// <summary>
+    /// 资产管理器单例。支持在 Unity 域重载后静态数据丢失时自动从场景找回活跃实例自愈。
+    /// </summary>
+    public static UmaAssetManager instance
+    {
+        get
+        {
+            if (_instance == null)
+            {
+                _instance = FindObjectOfType<UmaAssetManager>();
+            }
+            return _instance;
+        }
+        set => _instance = value;
+    }
 
     private readonly Dictionary<string, AssetBundle> LoadedBundles =
         new Dictionary<string, AssetBundle>(StringComparer.OrdinalIgnoreCase);
@@ -61,13 +76,13 @@ public class UmaAssetManager : MonoBehaviour
 
     private void Awake()
     {
-        if (instance != null && instance != this)
+        if (_instance != null && _instance != this)
         {
             DestroyImmediate(gameObject);
             return;
         }
 
-        instance = this;
+        _instance = this;
         DontDestroyOnLoad(gameObject);
     }
 
@@ -78,11 +93,11 @@ public class UmaAssetManager : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (instance != this)
+        if (_instance != this)
             return;
 
         ReleaseAllInternal(false, true, false);
-        instance = null;
+        _instance = null;
     }
 
     public static void PreLoadAndRun(List<UmaDatabaseEntry> entries, Action onDone)
@@ -109,7 +124,9 @@ public class UmaAssetManager : MonoBehaviour
         List<UmaDatabaseEntry> roots = DeduplicateEntries(entries);
         List<UmaDatabaseEntry> downloadEntries = ExpandUniqueEntries(roots);
 
-        if (Config.Instance.WorkMode == WorkMode.Standalone)
+        // 当用户开启了“下载缺失资源”选项，或者处于“单机免客户端模式（Standalone）”时，
+        // 自动并发拉取所需但本地缺失的依赖资源包及动作包
+        if (Config.Instance.DownloadMissingResources || Config.Instance.WorkMode == WorkMode.Standalone)
         {
             yield return UmaViewerDownload.DownloadAssets(
                 downloadEntries,

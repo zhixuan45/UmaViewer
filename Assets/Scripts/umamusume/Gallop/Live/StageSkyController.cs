@@ -74,6 +74,18 @@ namespace Gallop.Live
         public Renderer SkyGradRenderer => _skyGradRenderer;
         public Renderer CmnSkyRenderer => _cmnSkyRenderer;
         public bool IsInitialized => _isInitialized;
+
+        public Color LastBaseColor => _lastBaseColor;
+        public float LastBasePower => _lastBasePower;
+        public bool HasBaseColor => _hasBaseColor;
+
+        public Color LastGradColor => _lastGradColor;
+        public float LastGradPower => _lastGradPower;
+        public bool HasGradColor => _hasGradColor;
+
+        public Color LastCmnColor => _lastCmnColor;
+        public float LastCmnPower => _lastCmnPower;
+        public bool HasCmnColor => _hasCmnColor;
         #endregion
 
         private void Awake()
@@ -315,6 +327,13 @@ namespace Gallop.Live
                 SetupInvertedMaterial();
             }
 
+            // 核心自适应逻辑：智能识别 10147 舞台（如 1175 Live），自动将默认模式提升为云层反相模式
+            if (IsStage10147(stageController, candidateRenderers))
+            {
+                _currentMode = StageSkyMode.InvertCloudAlpha;
+                Debug.Log("[StageSkyController] 自适应检测到 10147 舞台，自动激活云层透明度反相模式 (StageSkyMode.InvertCloudAlpha)");
+            }
+
             _isInitialized = true;
 
             // 应用当前模式配置
@@ -325,6 +344,52 @@ namespace Gallop.Live
             {
                 BindTimelineControl(Director.instance._liveTimelineControl);
             }
+        }
+
+        /// <summary>
+        /// 判定当前是否为 10147 舞台（例如 1175 Live《ハロー・ポ拉里斯》专属舞台）
+        /// 支持通过 Director 当前 Live 歌曲/背景编号、StageController 与父节点命名、候选渲染器与材质多维度自适应识别
+        /// </summary>
+        /// <param name="stageController">关联的舞台控制器实例</param>
+        /// <param name="candidateRenderers">收集到的候选天空与场景渲染器列表</param>
+        /// <returns>若判定为 10147 舞台则返回 true</returns>
+        public bool IsStage10147(StageController stageController, IEnumerable<Renderer> candidateRenderers = null)
+        {
+            // 1. 检测 Director 当前 Live 歌曲或背景 ID
+            if (Director.instance != null && Director.instance.live != null)
+            {
+                var live = Director.instance.live;
+                if (live.MusicId == 1175) return true;
+                if (!string.IsNullOrEmpty(live.BackGroundId) && live.BackGroundId.IndexOf("10147", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+
+            // 2. 检测 StageController 对象命名及其父节点命名
+            if (stageController != null)
+            {
+                if (stageController.gameObject.name.IndexOf("10147", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (stageController.transform.parent != null && stageController.transform.parent.name.IndexOf("10147", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+
+            // 3. 检测自身对象与父节点命名
+            if (gameObject.name.IndexOf("10147", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (transform.parent != null && transform.parent.name.IndexOf("10147", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+            // 4. 遍历候选渲染器物体与材质命名（如 pfb_env_live10147_sky000, mtl_env_live10147_sky001 等）
+            if (candidateRenderers != null)
+            {
+                foreach (Renderer r in candidateRenderers)
+                {
+                    if (r == null) continue;
+                    if (r.name.IndexOf("10147", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                    if (r.gameObject.name.IndexOf("10147", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+                    Material sharedMat = null;
+                    try { sharedMat = r.sharedMaterial; } catch { }
+                    if (sharedMat != null && sharedMat.name.IndexOf("10147", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

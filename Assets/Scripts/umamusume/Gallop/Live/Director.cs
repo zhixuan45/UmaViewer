@@ -72,6 +72,28 @@ namespace Gallop.Live
 
         private Transform _mainCameraTransform;
 
+        /// <summary>
+        /// 全局复用的 MaterialPropertyBlock 实例，消灭 OnUpdateGlobalLight 和 OnUpdateBgColor1 每帧循环中的 new 堆内存分配。
+        /// 注意：Unity 禁止在 MonoBehaviour 构造函数与实例字段初始化阶段创建 MaterialPropertyBlock
+        /// （否则抛出 "CreateImpl is not allowed to be called from a MonoBehaviour constructor"，
+        /// 且字段会停留在 null，导致后续访问空引用），因此这里改为首次访问时的惰性创建。
+        /// </summary>
+        private MaterialPropertyBlock _sharedPropertyBlock;
+
+        /// <summary>
+        /// 惰性获取复用的 MaterialPropertyBlock，避免构造函数阶段触发 Unity 原生对象创建限制
+        /// </summary>
+        private MaterialPropertyBlock SharedPropertyBlock
+        {
+            get
+            {
+                if (_sharedPropertyBlock == null)
+                    _sharedPropertyBlock = new MaterialPropertyBlock();
+
+                return _sharedPropertyBlock;
+            }
+        }
+
         private static readonly Dictionary<string, UmaDatabaseEntry> _laserBundleCache
             = new Dictionary<string, UmaDatabaseEntry>();
 
@@ -213,10 +235,14 @@ namespace Gallop.Live
 
             _liveTimelineControl.OnUpdateFacial += delegate (FacialDataUpdateInfo updateInfo_, float liveTime_, int position)
             {
-                if (position < charaObjs.Count)
+                // 加固边界防御与有效容器断言，彻底杜绝高序号空槽位越界和空指针报错
+                if (position >= 0 && position < CharaContainerScript.Count && CharaContainerScript[position] != null)
                 {
                     var container = CharaContainerScript[position];
-                    container.FaceDrivenKeyTarget.AlterUpdateFacialNew(ref updateInfo_, liveTime_);
+                    if (container.FaceDrivenKeyTarget != null)
+                    {
+                        container.FaceDrivenKeyTarget.AlterUpdateFacialNew(ref updateInfo_, liveTime_);
+                    }
                 }
             };
 
@@ -230,29 +256,31 @@ namespace Gallop.Live
                         var container = charaLocator.UmaContainer;
                         if (container)
                         {
-                            MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-                            propertyBlock.SetFloat("_RimShadowRate", updateInfo.globalRimShadowRate);
-                            propertyBlock.SetColor("_RimColor", updateInfo.rimColor);
-                            propertyBlock.SetFloat("_RimStep", updateInfo.rimStep);
-                            propertyBlock.SetFloat("_RimFeather", updateInfo.rimFeather);
-                            propertyBlock.SetFloat("_RimSpecRate", updateInfo.rimSpecRate);
-                            propertyBlock.SetFloat("_RimHorizonOffset", updateInfo.RimHorizonOffset);
-                            propertyBlock.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
-                            propertyBlock.SetFloat("_RimHorizonOffset2", updateInfo.RimHorizonOffset2);
-                            propertyBlock.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
-                            propertyBlock.SetColor("_RimColor2", updateInfo.rimColor2);
-                            propertyBlock.SetFloat("_RimStep2", updateInfo.rimStep2);
-                            propertyBlock.SetFloat("_RimFeather2", updateInfo.rimFeather2);
-                            propertyBlock.SetFloat("_RimSpecRate2", updateInfo.rimSpecRate2);
-                            propertyBlock.SetFloat("_RimShadowRate2", updateInfo.globalRimShadowRate2);
+                            SharedPropertyBlock.Clear();
+                            SharedPropertyBlock.SetFloat("_RimShadowRate", updateInfo.globalRimShadowRate);
+                            SharedPropertyBlock.SetColor("_RimColor", updateInfo.rimColor);
+                            SharedPropertyBlock.SetFloat("_RimStep", updateInfo.rimStep);
+                            SharedPropertyBlock.SetFloat("_RimFeather", updateInfo.rimFeather);
+                            SharedPropertyBlock.SetFloat("_RimSpecRate", updateInfo.rimSpecRate);
+                            SharedPropertyBlock.SetFloat("_RimHorizonOffset", updateInfo.RimHorizonOffset);
+                            SharedPropertyBlock.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
+                            SharedPropertyBlock.SetFloat("_RimHorizonOffset2", updateInfo.RimHorizonOffset2);
+                            SharedPropertyBlock.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
+                            SharedPropertyBlock.SetColor("_RimColor2", updateInfo.rimColor2);
+                            SharedPropertyBlock.SetFloat("_RimStep2", updateInfo.rimStep2);
+                            SharedPropertyBlock.SetFloat("_RimFeather2", updateInfo.rimFeather2);
+                            SharedPropertyBlock.SetFloat("_RimSpecRate2", updateInfo.rimSpecRate2);
+                            SharedPropertyBlock.SetFloat("_RimShadowRate2", updateInfo.globalRimShadowRate2);
+                            // 逐帧、逐 Renderer 访问 renderer.materials 会克隆出整整一份材质数组
+                            // （并永久打断批处理），是本回调里最重的托管分配来源。
+                            // 这两项本来就只需要"逐 Renderer 覆盖"，改用上面同一个 MaterialPropertyBlock 下发：
+                            // 语义等价，开销降为一次 SetPropertyBlock，且不再产生任何托管分配。
+                            SharedPropertyBlock.SetFloat("_UseOriginalDirectionalLight", 1f);
+                            SharedPropertyBlock.SetVector("_OriginalDirectionalLightDir", tmpPos);
+
                             foreach (var renderer in container.Renderers)
                             {
-                                renderer.SetPropertyBlock(propertyBlock);
-                                foreach(var mat in renderer.materials)
-                                {
-                                    mat.SetFloat("_UseOriginalDirectionalLight", 1);
-                                    mat.SetVector("_OriginalDirectionalLightDir", tmpPos);
-                                }
+                                renderer.SetPropertyBlock(_sharedPropertyBlock);
                             }
                         }
                     }
@@ -291,15 +319,15 @@ namespace Gallop.Live
                         var container = charaLocator.UmaContainer;
                         if (container)
                         {
-                            MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-                            propertyBlock.SetColor("_CharaColor", updateInfo.color);
-                            propertyBlock.SetColor("_ToonDarkColor", updateInfo.toonDarkColor);
-                            propertyBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
-                            propertyBlock.SetColor("_OutlineColor", updateInfo.outlineColor);
-                            propertyBlock.SetFloat("_Saturation", updateInfo.Saturation);
+                            SharedPropertyBlock.Clear();
+                            SharedPropertyBlock.SetColor("_CharaColor", updateInfo.color);
+                            SharedPropertyBlock.SetColor("_ToonDarkColor", updateInfo.toonDarkColor);
+                            SharedPropertyBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
+                            SharedPropertyBlock.SetColor("_OutlineColor", updateInfo.outlineColor);
+                            SharedPropertyBlock.SetFloat("_Saturation", updateInfo.Saturation);
                             foreach (var renderer in container.Renderers)
                             {
-                                renderer.SetPropertyBlock(propertyBlock);
+                                renderer.SetPropertyBlock(_sharedPropertyBlock);
                             }
                         }
                     }
@@ -307,10 +335,13 @@ namespace Gallop.Live
             };
 
             SetupCharacterLocator();
+            // 在参演马娘组装与定位器就绪后，初始化全局手持道具装配
+            InitializeLiveProps();
             InitializeCamera();
             InitializeMirrorReflections();
             UpdateMainCamera();
             InitializeMultiCamera(_liveTimelineControl);
+            InitializeMonitorCamera(_liveTimelineControl);
             for (int i = 0; i < kTimelineCameraIndices.Length; i++)
             {
                 int num = kTimelineCameraIndices[i];
@@ -357,24 +388,8 @@ namespace Gallop.Live
             }
         }
 
-        public void InitializeMultiCamera(LiveTimelineControl control)
-        {
-            var cameraCount = control.data.multiCameraSettings.cameraNum;
-            MultiCamera[] cameras = new MultiCamera[cameraCount];
-            var root = new GameObject("MultiCameras");
-            root.transform.SetParent(control.transform);
-            for (int i = 0; i < cameraCount; i++)
-            {
-                var camObj = new GameObject($"MultiCamera_{i}");
-                camObj.transform.SetParent(root.transform);
+        // InitializeMultiCamera 已迁移至 Director.MultiCamera.cs 分部类实现增强版本
 
-                var cam = camObj.AddComponent<MultiCamera>();
-                cam.Initialize();
-                cameras[i] = cam;
-                control.MultiRecordFrames.Add(new List<LiveCameraFrame>());
-            }
-            control.SetMultiCamera(cameras);
-        }
 
         private void UpdateMainCamera()
         {
@@ -482,7 +497,9 @@ namespace Gallop.Live
             _liveTimelineControl.AlterUpdate(_liveCurrentTime);
             if (!_soloMode)
             {
+                LiveFrameProfiler.Begin(LiveFrameProfiler.AudioVocal);
                 UmaViewerAudio.AlterUpdate(_liveCurrentTime, partInfo, liveVocal, sliderControl.is_Outed);
+                LiveFrameProfiler.End(LiveFrameProfiler.AudioVocal);
             }
         }
 
@@ -502,6 +519,8 @@ namespace Gallop.Live
 
             if (_isLiveSetup)
             {
+                LiveFrameProfiler.BeginFrame();
+
                 _lateTimelineAppliedThisFrame = false;
 
                 if ((!UmaViewerMain.TryConsumeEscapeForFullScreen() && Input.GetKeyDown(KeyCode.Escape)) || _liveCurrentTime >= totalTime)
@@ -511,11 +530,12 @@ namespace Gallop.Live
 
                 if (_syncTime == false)
                 {
-                    if(liveMusic.sourceList.Count == 0)
+                    // 伴奏列表判空保护，杜绝 NullReferenceException
+                    if (liveMusic == null || liveMusic.sourceList == null || liveMusic.sourceList.Count == 0)
                     {
                         _syncTime = true;
                     }
-                    else if (liveMusic.sourceList[0].time > 0.01)
+                    else if (liveMusic.sourceList[0] != null && liveMusic.sourceList[0].time > 0.01f)
                     {
                         _liveCurrentTime = UI.ProgressBar.value * totalTime;
                         _liveCurrentTime = Mathf.Clamp(_liveCurrentTime, 0f, Mathf.Max(0f, totalTime - 0.001f));
@@ -599,7 +619,13 @@ namespace Gallop.Live
                 // 时间轴和主相机都更新完后再同步 Laser Renderer/朝向。
                 // 这样既不会读取上一帧 LaserUpdateInfo，也不会读取上一帧相机姿态。
                 if (_stageController != null)
+                {
+                    LiveFrameProfiler.Begin(LiveFrameProfiler.StageController);
                     _stageController.AlterUpdateLaserControllers();
+                    LiveFrameProfiler.End(LiveFrameProfiler.StageController);
+                }
+
+                LiveFrameProfiler.EndFrame();
             }
         }
 
@@ -614,6 +640,9 @@ namespace Gallop.Live
             {
                 UpdateMirrorReflections();
             }
+
+            // 驱动 URP 兼容的多机位全屏分屏呈现层更新
+            UpdateMultiCameraDisplay();
         }
 
         private void FixedUpdate()
@@ -682,6 +711,10 @@ namespace Gallop.Live
             // Cutt 和歌曲 part 也提前加载，避免进入场景后同步卡顿。
             AddByKey(string.Format(CUTT_PATH, live.MusicId));
             AddByKey(string.Format(LIVE_PART_PATH, live.MusicId));
+            AddByKey("livesettings");
+
+            // 预加载当前 Live 所需的角色道具与道具动作资源
+            result.AddRange(CollectLivePropsEntries(live));
 
             // 补全当前 Live 专属动作资源预载：
             // 遍历 main.AbList，匹配收集 3d/motion/live/body/son{live.MusicId} 的所有动作包，
@@ -845,9 +878,33 @@ namespace Gallop.Live
 
             Debug.Log($"[StagePreloadFallback] bgId={bgId}, musicId={currentLive?.MusicId}, bundles={required.Count}");
         }
+        /// <summary>
+        /// 安全停止并释放正在播放的伴奏与角色人声音轨
+        /// </summary>
+        public void CleanupAudio()
+        {
+            if (liveMusic != null)
+            {
+                UmaViewerAudio.Stop(liveMusic);
+            }
+
+            if (liveVocal != null)
+            {
+                foreach (var vocal in liveVocal)
+                {
+                    UmaViewerAudio.Stop(vocal);
+                }
+                liveVocal.Clear();
+            }
+        }
+
         private void OnDestroy()
         {
+            CleanupAudio();
             UnbindTimelineEvents();
+            CleanupMultiCamera();
+            CleanupMonitorCamera();
+            ClearLiveProps();
 
             if (_instance == this)
                 _instance = null;

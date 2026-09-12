@@ -28,6 +28,10 @@ namespace Gallop.Live
         public Dictionary<string, StageObjectUnit> StageObjectUnitMap = new Dictionary<string, StageObjectUnit>();
         public Dictionary<string, GameObject> StageObjectMap = new Dictionary<string, GameObject>();
         public Dictionary<string, Transform> StageParentMap = new Dictionary<string, Transform>();
+        // 记录舞台子物件的初始局部变换基准值，供时间轴增量模式（OffsetType.Add）运算使用
+        private readonly Dictionary<Transform, Vector3> _baseLocalPositions = new Dictionary<Transform, Vector3>();
+        private readonly Dictionary<Transform, Quaternion> _baseLocalRotations = new Dictionary<Transform, Quaternion>();
+        private readonly Dictionary<Transform, Vector3> _baseLocalScales = new Dictionary<Transform, Vector3>();
         [SerializeField] private bool _autoAddBlinkDriver = true;
 
         [Header("Environment mirror update")]
@@ -84,10 +88,12 @@ namespace Gallop.Live
             var dir = Director.instance;
             var ctl = dir ? dir._liveTimelineControl : null;
 
-            if (_boundTimelineControl != ctl)
+            // 仅当时间轴控制器有效且引用发生改变时，才重新绑定回调
+            if (ctl != null && _boundTimelineControl != ctl)
                 TryBindTimelineCallbacks();
 
-            if (!_laserSetupDone && _boundTimelineControl != null)
+            // 状态锁加固：仅当未初始化且时间轴数据已就绪时才尝试初始化激光，杜绝每帧重复调用
+            if (!_laserSetupDone && _boundTimelineControl != null && _boundTimelineControl.data != null)
                 TrySetupLaserObject(_boundTimelineControl);
 
             if (_laserControllerArray == null)
@@ -142,11 +148,15 @@ namespace Gallop.Live
                 skyCtrl.BindTimelineControl(ctl);
             }
 
-            _laserSetupDone = false;
-            _laserSetupTimelineControl = ctl;
-            _laserDataIndexMap.Clear();
+            // 状态锁加固：仅当时间轴控制器实例发生变更时，才重置激光状态并尝试初始化
+            if (_laserSetupTimelineControl != ctl)
+            {
+                _laserSetupDone = false;
+                _laserSetupTimelineControl = ctl;
+                _laserDataIndexMap.Clear();
 
-            TrySetupLaserObject(ctl);
+                TrySetupLaserObject(ctl);
+            }
         }
 
         private void OnDisable()
@@ -493,6 +503,11 @@ namespace Gallop.Live
                         StageParentMap[child.name] = child.parent;
                         StageParentMap[tmp_name] = child.parent;
 
+                        // 记录子物件的初始局部变换基准值，用于后续增量模式（OffsetType.Add）运算
+                        _baseLocalPositions[child] = child.localPosition;
+                        _baseLocalRotations[child] = child.localRotation;
+                        _baseLocalScales[child] = child.localScale;
+
                         if (!StageObjectMap.ContainsKey(child.name))
                         {
                             if (child.name.IndexOf("light", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -653,14 +668,14 @@ namespace Gallop.Live
                         break;
 
                     case AttachType.Character:
-                        // 挂载至指定位置马娘角色的 Transform
+                        // 挂载至指定位置马娘角色的手腕/手持骨骼 Transform，而非直接赋予脚底根节点 chara.transform
                         if (Director.instance != null && Director.instance.CharaContainerScript != null &&
                             updateInfo.CharacterPosition >= 0 && updateInfo.CharacterPosition < Director.instance.CharaContainerScript.Count)
                         {
                             var chara = Director.instance.CharaContainerScript[updateInfo.CharacterPosition];
                             if (chara != null)
                             {
-                                targetParent = chara.transform;
+                                targetParent = chara.FindAttachBone("Hand_Attach_R");
                             }
                         }
                         break;
@@ -680,12 +695,58 @@ namespace Gallop.Live
                     gameObject.transform.SetParent(targetParent);
                 }
 
-                if (updateInfo.data.enablePosition)
-                    gameObject.transform.localPosition = updateInfo.updateData.position;
-                if (updateInfo.data.enableRotate)
-                    gameObject.transform.localRotation = updateInfo.updateData.rotation;
-                if (updateInfo.data.enableScale)
-                    gameObject.transform.localScale = updateInfo.updateData.scale;
+                Transform tr = gameObject.transform;
+
+                // 获取并记录物体的初始局部位姿基准值，供增量模式计算
+                if (!_baseLocalPositions.TryGetValue(tr, out Vector3 basePos))
+                {
+                    basePos = tr.localPosition;
+                    _baseLocalPositions[tr] = basePos;
+                    _baseLocalRotations[tr] = tr.localRotation;
+                    _baseLocalScales[tr] = tr.localScale;
+                }
+                _baseLocalRotations.TryGetValue(tr, out Quaternion baseRot);
+                _baseLocalScales.TryGetValue(tr, out Vector3 baseScale);
+
+                // 修复层级坐标空间混淆：
+                // 时间轴下发的 position 与 rotation 是基于舞台根空间的全局变换。
+                // 当受控物体在场景中的当前父级 targetParent 不为 null 且不是舞台根节点时，
+                // 必须通过父节点的逆变换进行换算，消除深层父级平移与旋转叠加导致的位移二次放大和歪斜偏转！
+                // 如果父级就是舞台根节点或无父级，则直接赋给 localPosition/localRotation。
+                Vector3 targetLocalPos;
+                Quaternion targetLocalRot;
+                Vector3 targetLocalScale = updateInfo.updateData.scale;
+
+                if (targetParent != null && targetParent != transform)
+                {
+                    targetLocalPos = targetParent.InverseTransformPoint(updateInfo.updateData.position);
+                    targetLocalRot = Quaternion.Inverse(targetParent.rotation) * updateInfo.updateData.rotation;
+                }
+                else
+                {
+                    targetLocalPos = updateInfo.updateData.position;
+                    targetLocalRot = updateInfo.updateData.rotation;
+                }
+
+                // 支持增量模式（OffsetType.Add，在初始基准值基础上相加）与绝对值模式（OffsetType.Direct）
+                if (updateInfo.OffsetType == OffsetType.Add)
+                {
+                    if (updateInfo.data.enablePosition)
+                        tr.localPosition = basePos + targetLocalPos;
+                    if (updateInfo.data.enableRotate)
+                        tr.localRotation = baseRot * targetLocalRot;
+                    if (updateInfo.data.enableScale)
+                        tr.localScale = Vector3.Scale(baseScale, targetLocalScale);
+                }
+                else
+                {
+                    if (updateInfo.data.enablePosition)
+                        tr.localPosition = targetLocalPos;
+                    if (updateInfo.data.enableRotate)
+                        tr.localRotation = targetLocalRot;
+                    if (updateInfo.data.enableScale)
+                        tr.localScale = targetLocalScale;
+                }
             }
         }
 

@@ -13,9 +13,10 @@ namespace Gallop.Live
     public static class StageRuntimeDiagnostics
     {
         /// <summary>
-        /// 全局诊断开关，可在调试时开启或关闭
+        /// 全局诊断开关，默认关闭以彻底消灭热循环中的高频 LogBgColorHit 日志输出与 ExtractStackTrace 反射堆栈回溯。
+        /// 若需排查舞台材质染色问题，可在运行时临时置为 true。
         /// </summary>
-        public static bool EnableDiagnostics = true;
+        public static bool EnableDiagnostics = false;
 
         /// <summary>
         /// 背景色驱动日志节流字典：记录每个轨道名称上一次输出日志的时间，避免高频刷新刷屏

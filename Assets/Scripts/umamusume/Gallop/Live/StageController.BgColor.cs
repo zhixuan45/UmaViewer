@@ -79,31 +79,42 @@ namespace Gallop.Live
         private readonly Dictionary<Material, List<BgColor2RuntimeBinding>> _bindingsBySharedMaterialRef = new Dictionary<Material, List<BgColor2RuntimeBinding>>();
         private readonly Dictionary<string, List<BgColor2RuntimeBinding>> _bindingsBySharedMaterialName = new Dictionary<string, List<BgColor2RuntimeBinding>>(StringComparer.OrdinalIgnoreCase);
 
+        public void OnUpdateBgColor1(ref BgColor1UpdateInfo updateInfo)
+        {
+            UpdateBgColor1(ref updateInfo);
+        }
+
         private void UpdateBgColor1(ref BgColor1UpdateInfo updateInfo)
         {
             if (!_enableBgColorDriver)
                 return;
 
-            var targets = ResolveBgColorRenderers(updateInfo.TimelineName, wantBgColor2Style: false);
-
-            // 运行时诊断：记录 BgColor1 实际命中的目标渲染器与颜色
-            StageRuntimeDiagnostics.LogBgColorHit(updateInfo.TimelineName, 1, targets, updateInfo.color, updateInfo.colorPower);
-
-            if (targets == null || targets.Count == 0)
-                return;
-
             string tlNameLower = (updateInfo.TimelineName ?? "").ToLowerInvariant();
             bool timelineIsSky = tlNameLower.Contains("sky");
 
-            // 天空相关变色优先通过专职的 StageSkyController 采用 MaterialPropertyBlock 实时精准驱动
+            // 核心重构：天空相关变色优先派发逻辑！
+            // 原逻辑在 targets 判空后导致天空深层子节点变色被过早拦截。
+            // 现将其前置为第一优先级派发逻辑，确保当 updateInfo.TimelineName 包含 sky
+            // （如 sky_base_00, sky_grad_00, cmn_sky002）时，100% 能够将变色数据派发给 StageSkyController！
             if (timelineIsSky)
             {
-                var skyCtrl = GetComponent<StageSkyController>();
+                var skyCtrl = GetComponent<StageSkyController>() ?? GetComponentInChildren<StageSkyController>();
                 if (skyCtrl != null)
                 {
                     skyCtrl.OnUpdateBgColor1(ref updateInfo);
                 }
             }
+
+            var targets = ResolveBgColorRenderers(updateInfo.TimelineName, wantBgColor2Style: false);
+
+            // 运行时诊断：仅在显式开启全局诊断时记录，彻底消灭热循环中的日志与开销
+            if (StageRuntimeDiagnostics.EnableDiagnostics)
+            {
+                StageRuntimeDiagnostics.LogBgColorHit(updateInfo.TimelineName, 1, targets, updateInfo.color, updateInfo.colorPower);
+            }
+
+            if (targets == null || targets.Count == 0)
+                return;
 
             for (int i = 0; i < targets.Count; i++)
             {
@@ -115,12 +126,13 @@ namespace Gallop.Live
                 if (!timelineIsSky && rName.Contains("sky"))
                     continue;
 
-                // 天空渲染器已由 StageSkyController 专职采用 MaterialPropertyBlock 驱动，跳过 r.materials 避免材质克隆
+                // 天空渲染器已由 StageSkyController 专职采用 MaterialPropertyBlock 驱动，跳过避免重复设置
                 if (rName.Contains("sky"))
                     continue;
 
+                // 核心性能优化：全面使用 sharedMaterials 替代 materials，杜绝深拷贝克隆材质与高频 GC 停顿，维持合批
                 Material[] mats;
-                try { mats = r.materials; }
+                try { mats = r.sharedMaterials; }
                 catch { continue; }
                 if (mats == null) continue;
 
@@ -152,11 +164,27 @@ namespace Gallop.Live
             float extra = ResolveBgColorExtraValue(updateInfo.randomTableIndex);
             var groups = ResolveBgColor2Groups(updateInfo.TimelineName);
 
-            // 运行时诊断：记录 BgColor2 实际命中的目标渲染器与颜色
-            List<Renderer> logTargets = (groups != null && groups.Count > 0)
-                ? groups.SelectMany(g => g.renderers).Distinct().ToList()
-                : null;
-            StageRuntimeDiagnostics.LogBgColorHit(updateInfo.TimelineName, 2, logTargets, updateInfo.color1, updateInfo.power);
+            // 运行时诊断：彻底剔除 SelectMany.Distinct.ToList 堆分配，仅在开启诊断时以轻量方式收集
+            if (StageRuntimeDiagnostics.EnableDiagnostics)
+            {
+                List<Renderer> logTargets = null;
+                if (groups != null && groups.Count > 0)
+                {
+                    logTargets = new List<Renderer>();
+                    for (int gi = 0; gi < groups.Count; gi++)
+                    {
+                        var grp = groups[gi];
+                        if (grp == null || grp.renderers == null) continue;
+                        for (int ri = 0; ri < grp.renderers.Count; ri++)
+                        {
+                            var rend = grp.renderers[ri];
+                            if (rend != null && !logTargets.Contains(rend))
+                                logTargets.Add(rend);
+                        }
+                    }
+                }
+                StageRuntimeDiagnostics.LogBgColorHit(updateInfo.TimelineName, 2, logTargets, updateInfo.color1, updateInfo.power);
+            }
 
             string tlNameLower = (updateInfo.TimelineName ?? "").ToLowerInvariant();
             bool timelineIsSky = tlNameLower.Contains("sky");
@@ -180,8 +208,9 @@ namespace Gallop.Live
                         if (!timelineIsSky && rName.Contains("sky"))
                             continue;
 
+                        // 核心性能优化：全面使用 sharedMaterials 替代 materials，杜绝深拷贝克隆材质与高频 GC 停顿
                         Material[] mats;
-                        try { mats = r.materials; }
+                        try { mats = r.sharedMaterials; }
                         catch { continue; }
                         if (mats == null) continue;
 
@@ -212,8 +241,9 @@ namespace Gallop.Live
                 if (!timelineIsSky && rName.Contains("sky"))
                     continue;
 
+                // 核心性能优化：兜底分支同样使用 sharedMaterials 替代 materials
                 Material[] mats;
-                try { mats = r.materials; }
+                try { mats = r.sharedMaterials; }
                 catch { continue; }
                 if (mats == null) continue;
 
@@ -672,10 +702,11 @@ namespace Gallop.Live
 
             ApplyBindingOverrides(timelineName, key, set);
 
-            var all = GetComponentsInChildren<Renderer>(true);
-            for (int i = 0; i < all.Length; i++)
+            // 核心性能修复：不再每次调用 GetComponentsInChildren（开销巨大），
+            // 改为复用 RebuildBgColorCache 在初始化时已填充的 _allStageRenderers 缓存列表
+            for (int i = 0; i < _allStageRenderers.Count; i++)
             {
-                var r = all[i];
+                var r = _allStageRenderers[i];
                 if (r == null) continue;
                 if (wantBgColor2Style && !RendererHasBgColor2Props(r)) continue;
                 if (!wantBgColor2Style && !RendererHasBgColor1Props(r)) continue;
@@ -758,15 +789,15 @@ namespace Gallop.Live
             if (_bgColorBindingOverrides == null || _bgColorBindingOverrides.Length == 0)
                 return;
 
-            var all = GetComponentsInChildren<Renderer>(true);
+            // 性能修复：复用预缓存的 _allStageRenderers，避免 GetComponentsInChildren 全场景遍历
             for (int i = 0; i < _bgColorBindingOverrides.Length; i++)
             {
                 var rule = _bgColorBindingOverrides[i];
                 if (rule == null || NormalizeKey(rule.timelineName) != key) continue;
 
-                for (int j = 0; j < all.Length; j++)
+                for (int j = 0; j < _allStageRenderers.Count; j++)
                 {
-                    var r = all[j];
+                    var r = _allStageRenderers[j];
                     if (r != null && MatchRule(r, rule))
                         set.Add(r);
                 }

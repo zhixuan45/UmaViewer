@@ -7,7 +7,7 @@ using UnityEngine.Rendering;
 
 namespace Gallop.Live
 {
-    public class StageMonitorDriver : MonoBehaviour
+    public partial class StageMonitorDriver : MonoBehaviour
     {
         [Header("绑定与调试")]
         public bool verboseLog = false, includeInactiveRenderers = true, rebuildCacheOnEnable = true, rebuildCacheWhenTargetMissing = true, autoInitializeProvider = true;
@@ -21,36 +21,6 @@ namespace Gallop.Live
         public string alphaProperty = "_Alpha", colorFadeProperty = "_ColorFade", baseColorProperty = "_BaseColor";
         public string monitorWidthProperty = "_MonitorWidth", monitorHeightProperty = "_MonitorHeight", crossFadeRateProperty = "_CrossFadeRate";
         public string srcBlendModeProperty = "_SrcBlendMode", dstBlendModeProperty = "_DstBlendMode", srcBlendProperty = "_SrcBlend", dstBlendProperty = "_DstBlend", zWriteProperty = "_ZWrite";
-
-        private sealed class MonitorMaterialBinding
-        {
-            public Renderer renderer;
-            public Material material;
-            public string rendererKey, materialKey, rendererCompact, materialCompact, groupKey;
-            public Vector2 baseFilterScale = Vector2.one, baseFilterOffset = Vector2.zero;
-            public float baseAlpha = 1f;
-            public Color baseColor = Color.white, baseColorFade = Color.clear;
-            public bool hasSrcBlendMode, hasDstBlendMode, hasAppliedState;
-            public float baseSrcBlendMode, baseDstBlendMode;
-            public MonitorShaderState appliedState;
-        }
-
-        private struct MonitorTextureState
-        {
-            public Texture2D texture, maskTexture;
-            public int imageIndex;
-            public Vector2 offset, scale;
-        }
-
-        private struct MonitorShaderState
-        {
-            public MonitorTextureState main, fade;
-            public Texture2D filterTexture;
-            public float alpha, width, height, crossFadeRate, filterTexScale;
-            public Color colorFade, baseColor;
-            public int srcBlendMode, dstBlendMode, renderQueue;
-            public bool hasRenderQueue, hasMainTexture, hasFadeTexture, useBlendMode, useBaseColor;
-        }
 
         private LiveTimelineControl _ctl;
         private StageController _stage;
@@ -199,6 +169,24 @@ namespace Gallop.Live
             return false;
         }
 
+        /// <summary>
+        /// 判断指定渲染器是否属于点唱机屏幕节点：节点名为 monitor 或包含 monitor_audio（兼顾父节点包含 monitor_audio）
+        /// </summary>
+        private static bool IsAudioMonitorRenderer(Renderer renderer)
+        {
+            if (renderer == null) return false;
+            string name = renderer.name;
+            if (string.Equals(name, "monitor", StringComparison.OrdinalIgnoreCase)) return true;
+            if (name.IndexOf("monitor_audio", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            Transform p = renderer.transform.parent;
+            while (p != null)
+            {
+                if (p.name.IndexOf("monitor_audio", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                p = p.parent;
+            }
+            return false;
+        }
+
         public void RebuildCache()
         {
             _bindings.Clear();
@@ -223,12 +211,28 @@ namespace Gallop.Live
                 }
                 if (materials == null || materials.Length == 0) continue;
 
+                // 适配点唱机屏幕节点：如果节点名为 monitor 或包含 monitor_audio，即使材质为 Default（mtl_env_live10146_default000）也纳入绑定
+                bool isAudioMonitor = IsAudioMonitorRenderer(renderer);
+
                 for (int j = 0; j < materials.Length; j++)
                 {
                     Material material = materials[j];
-                    if (!IsMonitorMaterial(material)) continue;
+                    if (material == null) continue;
 
-                    // 目标 2：如果材质名称包含 StageMonitorBlendTransparent 或 monitor，确保具备半透明混合能力
+                    bool isMonitorMat = IsMonitorMaterial(material);
+                    if (!isMonitorMat && !isAudioMonitor) continue;
+
+                    // 若属于点唱机屏幕节点且缺少监视器着色器，则动态查找 Gallop/3D/Live/Stage/Monitor 赋予它
+                    if (isAudioMonitor)
+                    {
+                        if (material.shader == null || material.shader.name.IndexOf("Monitor", StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            Shader monitorShader = Shader.Find(monitorShaderName);
+                            if (monitorShader != null) material.shader = monitorShader;
+                        }
+                    }
+
+                    // 如果材质名称包含 StageMonitorBlendTransparent 或 monitor，确保具备半透明混合能力
                     EnsureTransparentBlend(material);
 
                     MonitorMaterialBinding binding = new MonitorMaterialBinding
@@ -236,8 +240,17 @@ namespace Gallop.Live
                         renderer = renderer, material = material,
                         rendererKey = NormalizeName(renderer.name), materialKey = NormalizeName(material.name),
                         rendererCompact = CompactName(renderer.name), materialCompact = CompactName(material.name),
+                        isAudioMonitor = isAudioMonitor
                     };
                     binding.groupKey = BuildGroupKey(binding);
+
+                    // 记录原始主纹理与 UV 缩放偏移，供平滑回退时完整保留原始 MainTex
+                    if (HasTextureProperty(material, mainTexProperty))
+                    {
+                        binding.baseMainTex = material.GetTexture(mainTexProperty);
+                        binding.baseMainScale = material.GetTextureScale(mainTexProperty);
+                        binding.baseMainOffset = material.GetTextureOffset(mainTexProperty);
+                    }
 
                     if (!string.IsNullOrEmpty(filterTexProperty) && material.HasProperty(filterTexProperty))
                     {
@@ -245,7 +258,7 @@ namespace Gallop.Live
                         binding.baseFilterOffset = material.GetTextureOffset(filterTexProperty);
                     }
 
-                    // 记录原始基准透明度，若初始为 0 则保底为 1f，便于后续视频播放时正确显示
+                    // 记录原始基准透明度，若初始为 0 则保底为 1f，便于后续视频播放或平滑回退时正确显示
                     float initialAlpha = 1f;
                     if (TryHasProperty(material, alphaProperty))
                     {
@@ -263,9 +276,17 @@ namespace Gallop.Live
                     if (TryHasProperty(material, dstBlendModeProperty)) { binding.hasDstBlendMode = true; binding.baseDstBlendMode = material.GetFloat(dstBlendModeProperty); }
                     else if (TryHasProperty(material, dstBlendProperty)) { binding.hasDstBlendMode = true; binding.baseDstBlendMode = material.GetFloat(dstBlendProperty); }
 
-                    // 目标 1：初始状态下杜绝黑模，强制 _Alpha = 0f 并隐藏 Renderer，确保 100% 透明透光绝不遮挡夕阳
-                    TrySetFloat(material, alphaProperty, 0f);
-                    if (renderer != null) renderer.enabled = false;
+                    // 点唱机屏幕初始保持基准不透明度（1f）与启用 Renderer，普通舞台大屏或无贴图网格初始强制透明隐藏杜绝遮挡夕阳与死黑方块
+                    if (isAudioMonitor && binding.baseMainTex != null)
+                    {
+                        TrySetFloat(material, alphaProperty, initialAlpha);
+                        if (renderer != null) renderer.enabled = true;
+                    }
+                    else
+                    {
+                        TrySetFloat(material, alphaProperty, 0f);
+                        if (renderer != null) renderer.enabled = false;
+                    }
 
                     _bindings.Add(binding);
                 }
@@ -316,12 +337,64 @@ namespace Gallop.Live
         }
 
         /// <summary>
-        /// 将指定监视器绑定置于空闲未播放状态：
-        /// 将 Renderer.enabled 设为 false，材质 _Alpha 设为 0f，确保屏幕 100% 透明透光。
+        /// 将指定监视器绑定平滑回退至原始静态贴图显示：
+        /// 仅当材质具备有效的基准主纹理（baseMainTex != null）时才保持 Renderer.enabled = true 与不透明度；
+        /// 若缺乏主纹理（baseMainTex == null），强制置为透明并关闭 Renderer，杜绝在背景中渲染出死黑方块。
+        /// </summary>
+        private void SetBindingFallback(MonitorMaterialBinding binding)
+        {
+            if (binding == null) return;
+
+            // 核心防黑保护：若材质无有效基准纹理，绝不以实体不透明渲染，直接透明隐藏
+            if (binding.baseMainTex == null)
+            {
+                if (binding.renderer != null && binding.renderer.enabled) binding.renderer.enabled = false;
+                if (binding.material != null)
+                {
+                    TrySetFloat(binding.material, alphaProperty, 0f);
+                    EnsureTransparentBlend(binding.material);
+                }
+                if (binding.hasAppliedState)
+                {
+                    MonitorShaderState state = binding.appliedState;
+                    state.alpha = 0f;
+                    binding.appliedState = state;
+                }
+                return;
+            }
+
+            if (binding.renderer != null && !binding.renderer.enabled) binding.renderer.enabled = true;
+            if (binding.material != null)
+            {
+                float fallbackAlpha = binding.baseAlpha > 0.001f ? binding.baseAlpha : 1f;
+                TrySetFloat(binding.material, alphaProperty, fallbackAlpha);
+                if (HasTextureProperty(binding.material, mainTexProperty))
+                {
+                    binding.material.SetTexture(mainTexProperty, binding.baseMainTex);
+                    binding.material.SetTextureScale(mainTexProperty, binding.baseMainScale);
+                    binding.material.SetTextureOffset(mainTexProperty, binding.baseMainOffset);
+                }
+            }
+            if (binding.hasAppliedState)
+            {
+                MonitorShaderState state = binding.appliedState;
+                state.alpha = binding.baseAlpha > 0.001f ? binding.baseAlpha : 1f;
+                binding.appliedState = state;
+            }
+        }
+
+        /// <summary>
+        /// 将指定监视器绑定置于空闲状态：
+        /// 点唱机屏幕平滑回退保留原始显示；普通舞台大屏则隐藏 Renderer 并置 _Alpha = 0f，确保 100% 透明透光。
         /// </summary>
         private void SetBindingIdle(MonitorMaterialBinding binding)
         {
             if (binding == null) return;
+            if (binding.isAudioMonitor)
+            {
+                SetBindingFallback(binding);
+                return;
+            }
             if (binding.renderer != null && binding.renderer.enabled) binding.renderer.enabled = false;
             if (binding.material != null)
             {
@@ -337,7 +410,7 @@ namespace Gallop.Live
         }
 
         /// <summary>
-        /// 将所有监视器绑定置于空闲透明状态
+        /// 将所有监视器绑定置于空闲状态（点唱机屏幕回退，普通大屏透明隐藏）
         /// </summary>
         private void SetAllBindingsIdle()
         {
@@ -412,11 +485,36 @@ namespace Gallop.Live
                     }
                     if (targets.Count == 0) continue;
 
-                    // 目标 1：严格检查有效视频播放条件（dispID > 0 且存在有效主纹理）
+                    // 目标 1：严格检查有效视频播放条件（dispID > 0 且存在有效主纹理）或 MonitorCamera 实时画面
                     MonitorShaderState state = default;
-                    bool isPlayable = curKey.dispID > 0 &&
+                    bool isPlayable = false;
+
+                    // 检查当前关键帧是否标记使用 MonitorCamera 实时摄像机画面
+                    bool useMonitorCam = curKey.IsMonitorCameraFlag() || curKey.IsForcedUseMonitorCamera;
+                    RenderTexture monitorCamRT = (useMonitorCam && Director.instance != null) ? Director.instance.MonitorCameraTexture : null;
+
+                    if (monitorCamRT != null)
+                    {
+                        state.main.texture = monitorCamRT;
+                        state.hasMainTexture = true;
+                        state.alpha = curKey.blendFactor > 0.001f ? curKey.blendFactor : 1f;
+                        state.width = curKey.size.x;
+                        state.height = curKey.size.y;
+                        state.colorFade = curKey.colorFade;
+                        state.baseColor = curKey.BaseColor.a > 0.001f ? curKey.BaseColor : Color.white;
+                        state.srcBlendMode = curKey.SrcBlendMode;
+                        state.dstBlendMode = curKey.DstBlendMode;
+                        state.useBlendMode = curKey.IsEnabledBlendMode;
+                        state.renderQueue = curKey.RenderQueueNo;
+                        state.hasRenderQueue = curKey.IsRenderQueue != 0;
+                        isPlayable = true;
+                    }
+                    else
+                    {
+                        isPlayable = curKey.dispID > 0 &&
                                      TryBuildShaderState(monitorData, curKey, nextKey, currentFrame, out state) &&
                                      state.hasMainTexture && state.main.texture != null;
+                    }
 
                     if (isPlayable)
                     {
@@ -432,13 +530,24 @@ namespace Gallop.Live
                     }
                     else
                     {
-                        // 当前机位/关键帧未播放视频（dispID <= 0，或者 hasMainTexture 为 false，或者尚无有效纹理）：
-                        // 对应监视器屏幕保持或切换为 100% 透明透光与隐藏，绝不遮挡夕阳
+                        // 完善平滑回退：当当前 Live 缺乏专属 UVMovie 切片（dispID <= 0 或 contextSlots 为空）时：
+                        // 保持点唱机等屏幕网格 Renderer.enabled = true，材质 _Alpha 维持基准不透明度（如 1f）并保留其原始 MainTex，严禁无差别 SetBindingIdle 导致屏幕被强制透明隐藏或变黑；
+                        // 普通舞台大屏则保持或切换为 100% 透明透光与隐藏，绝不遮挡夕阳
                         for (int j = 0; j < targets.Count; j++)
                         {
                             MonitorMaterialBinding target = targets[j];
                             if (target != null && !_activeBindingsThisFrame.Contains(target))
-                                SetBindingIdle(target);
+                            {
+                                if (target.isAudioMonitor || curKey.dispID <= 0 || _provider.ContextSlotCount == 0)
+                                {
+                                    SetBindingFallback(target);
+                                    _activeBindingsThisFrame.Add(target);
+                                }
+                                else
+                                {
+                                    SetBindingIdle(target);
+                                }
+                            }
                         }
                     }
                 }
@@ -567,68 +676,6 @@ namespace Gallop.Live
         }
 
         private bool TryGetFallbackContextSlot(out MonitorUvMovieContextSlot slot) => TryGetPlayableContextSlot(1, out slot);
-
-        private bool DoesChangeConditionMatchCurrentCharacters(LiveTimelineMonitorDressCondition[] conditions)
-        {
-            if (conditions == null || conditions.Length == 0) return true;
-            for (int i = 0; i < conditions.Length; i++)
-            {
-                LiveTimelineMonitorDressCondition condition = conditions[i];
-                if (condition != null && condition.IsEnabled && !DoesSingleConditionMatchCurrentCharacters(condition))
-                    return false;
-            }
-            return true;
-        }
-
-        private bool DoesSingleConditionMatchCurrentCharacters(LiveTimelineMonitorDressCondition condition)
-        {
-            if (condition == null || !condition.IsEnabled) return true;
-            Director director = Director.instance;
-            if (director?.CharaContainerScript == null || director.CharaContainerScript.Count == 0) return false;
-
-            for (int i = 0; i < director.CharaContainerScript.Count; i++)
-            {
-                UmaContainerCharacter container = director.CharaContainerScript[i];
-                if (container == null) continue;
-                int charaId = GetContainerCharaId(container);
-                int dressId = GetContainerDressId(container);
-                if ((condition.CharaId <= 0 || condition.CharaId == charaId) && (condition.DressId <= 0 || condition.DressId == dressId))
-                    return true;
-            }
-            return false;
-        }
-
-        private static int GetContainerCharaId(UmaContainerCharacter container)
-        {
-            if (container == null) return 0;
-            if (container.CharaEntry != null && container.CharaEntry.Id > 0) return container.CharaEntry.Id;
-            if (container.CharaData != null)
-            {
-                try
-                {
-                    object idValue = container.CharaData["id"];
-                    if (idValue != null && int.TryParse(idValue.ToString(), out int charaId)) return charaId;
-                }
-                catch { }
-            }
-            return 0;
-        }
-
-        private static int GetContainerDressId(UmaContainerCharacter container)
-        {
-            if (container == null) return 0;
-            if (TryParseDressIdPrefix(container.VarCostumeIdLong, out int dressId)) return dressId;
-            if (TryParseDressIdPrefix(container.VarCostumeIdShort, out dressId)) return dressId;
-            return 0;
-        }
-
-        private static bool TryParseDressIdPrefix(string costumeId, out int dressId)
-        {
-            dressId = 0;
-            if (string.IsNullOrWhiteSpace(costumeId)) return false;
-            string[] parts = costumeId.Split('_');
-            return parts.Length > 0 && int.TryParse(parts[0], out dressId);
-        }
 
         private bool TryBuildTextureState(MonitorUvMovieContextSlot slot, MonitorUvMovieClipData clip, float localTime, float playbackSpeed,
             bool isReversePlay, int startOffsetFrame, int lightImageNo, out MonitorTextureState state)
@@ -826,85 +873,9 @@ namespace Gallop.Live
             binding.hasAppliedState = true;
         }
 
-        private List<MonitorMaterialBinding> ResolveBindings(string timelineName)
-        {
-            string normalized = NormalizeName(timelineName);
-            if (string.IsNullOrEmpty(normalized)) return EmptyBindingList;
-            if (_bindingCache.TryGetValue(normalized, out List<MonitorMaterialBinding> cached)) return cached;
-
-            _resolveBuffer.Clear();
-            string compact = CompactName(normalized);
-            AddMatchesExact(normalized, compact, _resolveBuffer);
-            if (_resolveBuffer.Count == 0) AddMatchesContains(normalized, compact, _resolveBuffer);
-            if (_resolveBuffer.Count == 0 && TryExtractMonitorIndex(normalized, out int numericIndex)) AddMatchesByNumericIndex(numericIndex, _resolveBuffer);
-            if (_resolveBuffer.Count == 0 && TryExtractMonitorLetterIndex(normalized, out int letterIndex)) AddMatchesByOrdinal(letterIndex, _resolveBuffer);
-
-            List<MonitorMaterialBinding> resolved = new List<MonitorMaterialBinding>(_resolveBuffer.Count);
-            for (int i = 0; i < _resolveBuffer.Count; i++)
-            {
-                MonitorMaterialBinding binding = _resolveBuffer[i];
-                if (binding != null && !resolved.Contains(binding)) resolved.Add(binding);
-            }
-            _bindingCache[normalized] = resolved;
-            return resolved;
-        }
-
-        private void AddMatchesExact(string normalized, string compact, List<MonitorMaterialBinding> result)
-        {
-            for (int i = 0; i < _bindings.Count; i++)
-            {
-                MonitorMaterialBinding b = _bindings[i];
-                if (b == null) continue;
-                if (b.materialKey == normalized || b.rendererKey == normalized || b.materialCompact == compact || b.rendererCompact == compact || b.groupKey == normalized || b.groupKey == compact)
-                    result.Add(b);
-            }
-        }
-
-        private void AddMatchesContains(string normalized, string compact, List<MonitorMaterialBinding> result)
-        {
-            for (int i = 0; i < _bindings.Count; i++)
-            {
-                MonitorMaterialBinding b = _bindings[i];
-                if (b == null) continue;
-                if (b.materialKey.Contains(normalized) || b.rendererKey.Contains(normalized) || (!string.IsNullOrEmpty(compact) && (b.materialCompact.Contains(compact) || b.rendererCompact.Contains(compact))))
-                    result.Add(b);
-            }
-        }
-
-        private void AddMatchesByNumericIndex(int monitorIndex, List<MonitorMaterialBinding> result)
-        {
-            string groupKey = $"monitor{monitorIndex:D3}", compactKey = CompactName(groupKey), relaxedKey = $"monitor{monitorIndex}";
-            for (int i = 0; i < _bindings.Count; i++)
-            {
-                MonitorMaterialBinding b = _bindings[i];
-                if (b == null) continue;
-                if (b.groupKey == groupKey || b.materialKey.Contains(groupKey) || b.rendererKey.Contains(groupKey) ||
-                    b.materialCompact.Contains(compactKey) || b.rendererCompact.Contains(compactKey) ||
-                    b.materialCompact.Contains(relaxedKey) || b.rendererCompact.Contains(relaxedKey))
-                    result.Add(b);
-            }
-        }
-
-        private void AddMatchesByOrdinal(int ordinal, List<MonitorMaterialBinding> result)
-        {
-            if (ordinal < 0 || _bindings.Count == 0) return;
-            List<string> groups = new List<string>(_bindings.Count);
-            for (int i = 0; i < _bindings.Count; i++)
-            {
-                string groupKey = _bindings[i]?.groupKey;
-                if (!string.IsNullOrEmpty(groupKey) && !groups.Contains(groupKey)) groups.Add(groupKey);
-            }
-            groups.Sort(StringComparer.OrdinalIgnoreCase);
-            if (ordinal >= groups.Count) return;
-
-            string targetGroup = groups[ordinal];
-            for (int i = 0; i < _bindings.Count; i++)
-            {
-                MonitorMaterialBinding b = _bindings[i];
-                if (b != null && b.groupKey == targetGroup) result.Add(b);
-            }
-        }
-
+        /// <summary>
+        /// 判定材质是否具备监视器屏幕特征（包含特定 Shader、名称或关键着色器贴图属性）
+        /// </summary>
         private bool IsMonitorMaterial(Material material)
         {
             if (material == null) return false;
@@ -919,61 +890,6 @@ namespace Gallop.Live
             if (TryHasProperty(material, alphaProperty)) score++;
             if (TryHasProperty(material, colorFadeProperty)) score++;
             return score >= 3;
-        }
-
-        private static bool HasTextureProperty(Material material, string propertyName) => material != null && !string.IsNullOrEmpty(propertyName) && material.HasProperty(propertyName);
-        private static bool TryHasProperty(Material material, string propertyName) => material != null && !string.IsNullOrEmpty(propertyName) && material.HasProperty(propertyName);
-        private static bool TrySetFloat(Material material, string propertyName, float value) { if (!TryHasProperty(material, propertyName)) return false; material.SetFloat(propertyName, value); return true; }
-        private static bool TrySetColor(Material material, string propertyName, Color value) { if (!TryHasProperty(material, propertyName)) return false; material.SetColor(propertyName, value); return true; }
-        private static bool IsColorEffectivelyClear(Color value) => value.a <= 0.0001f && value.r <= 0.0001f && value.g <= 0.0001f && value.b <= 0.0001f;
-        private static bool Approximately(float a, float b) => Mathf.Abs(a - b) <= 0.0001f;
-        private static bool Approximately(Vector2 a, Vector2 b) => Approximately(a.x, b.x) && Approximately(a.y, b.y);
-        private static bool Approximately(Color a, Color b) => Approximately(a.r, b.r) && Approximately(a.g, b.g) && Approximately(a.b, b.b) && Approximately(a.a, b.a);
-
-        private static string NormalizeName(string value) => string.IsNullOrEmpty(value) ? string.Empty : value.Replace("(Instance)", string.Empty).Replace("(Clone)", string.Empty).Trim().ToLowerInvariant();
-
-        private static string CompactName(string value)
-        {
-            string normalized = NormalizeName(value);
-            if (string.IsNullOrEmpty(normalized)) return string.Empty;
-            char[] buffer = new char[normalized.Length];
-            int count = 0;
-            for (int i = 0; i < normalized.Length; i++) { char c = normalized[i]; if (char.IsLetterOrDigit(c)) buffer[count++] = c; }
-            return count > 0 ? new string(buffer, 0, count) : string.Empty;
-        }
-
-        private static string BuildGroupKey(MonitorMaterialBinding binding)
-        {
-            if (binding == null) return string.Empty;
-            if (TryExtractMonitorIndex(binding.materialKey, out int matIdx)) return $"monitor{matIdx:D3}";
-            if (TryExtractMonitorIndex(binding.rendererKey, out int renIdx)) return $"monitor{renIdx:D3}";
-            if (!string.IsNullOrEmpty(binding.materialCompact) && binding.materialCompact.Contains("monitor")) return binding.materialCompact;
-            if (!string.IsNullOrEmpty(binding.rendererCompact) && binding.rendererCompact.Contains("monitor")) return binding.rendererCompact;
-            return !string.IsNullOrEmpty(binding.materialCompact) ? binding.materialCompact : binding.rendererCompact;
-        }
-
-        private static bool TryExtractMonitorIndex(string value, out int index)
-        {
-            index = -1;
-            string compact = CompactName(value);
-            if (string.IsNullOrEmpty(compact)) return false;
-            int monitorIndex = compact.IndexOf("monitor", StringComparison.OrdinalIgnoreCase);
-            if (monitorIndex < 0) return false;
-            monitorIndex += "monitor".Length;
-            int start = monitorIndex;
-            while (monitorIndex < compact.Length && char.IsDigit(compact[monitorIndex])) monitorIndex++;
-            return monitorIndex > start && int.TryParse(compact.Substring(start, monitorIndex - start), out index);
-        }
-
-        private static bool TryExtractMonitorLetterIndex(string value, out int index)
-        {
-            index = -1;
-            string compact = CompactName(value);
-            if (string.IsNullOrEmpty(compact) || !compact.StartsWith("monitor", StringComparison.OrdinalIgnoreCase) || compact.Length != "monitor".Length + 1) return false;
-            char c = compact[compact.Length - 1];
-            if (c < 'a' || c > 'z') return false;
-            index = c - 'a';
-            return true;
         }
     }
 }

@@ -17,6 +17,7 @@ namespace Gallop.Live
         private void ExitLive()
         {
             isExit = true;
+            ClearLiveProps();
             if (_liveTimelineControl != null && _liveTimelineControl.IsRecordVMD)
             {
                 ExitTime = DateTime.Now;
