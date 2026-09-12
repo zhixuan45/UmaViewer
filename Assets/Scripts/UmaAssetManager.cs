@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -102,6 +102,10 @@ public class UmaAssetManager : MonoBehaviour
 
     private IEnumerator PreLoadAsset(List<UmaDatabaseEntry> entries, Action onDone)
     {
+        // 在执行庞大的依赖树解析之前让出一帧，确保上一帧由 UI 唤起的加载进度界面能够得到及时渲染，彻底消除定格卡死
+        yield return null;
+        OnLoadProgressChange?.Invoke(0, 100, "Analyzing Dependencies...");
+
         List<UmaDatabaseEntry> roots = DeduplicateEntries(entries);
         List<UmaDatabaseEntry> downloadEntries = ExpandUniqueEntries(roots);
 
@@ -117,6 +121,9 @@ public class UmaAssetManager : MonoBehaviour
 
         for (int i = 0; i < roots.Count; i++)
         {
+            // 在解析 roots 依赖列表的循环中分步刷新加载提示，并显示当前解析进度，避免长时间主线程卡顿
+            OnLoadProgressChange?.Invoke(i + 1, roots.Count, "Analyzing Dependencies...");
+
             UmaDatabaseEntry root = roots[i];
             List<UmaDatabaseEntry> requests = SearchAB(UmaViewerMain.Instance, root);
 
@@ -142,7 +149,10 @@ public class UmaAssetManager : MonoBehaviour
                 yield return null;
         }
 
-        OnLoadProgressChange?.Invoke(-1, loadItems.Count, null);
+        // 资源预载完毕：不要在此刻直接隐藏关闭 LoadingProgressPanel（避免退出重进时瞬间关闭导致主线程同步实例化模型卡死假象），
+        // 而是展示 "Loading Characters & Stage..."，直到 LoadLiveUma 与场景加载全部就绪即将开播时才隐藏
+        int total = Mathf.Max(1, loadItems.Count);
+        OnLoadProgressChange?.Invoke(total, total, "Loading Characters & Stage...");
         LoadCoroutine = null;
         onDone?.Invoke();
     }
@@ -217,10 +227,8 @@ public class UmaAssetManager : MonoBehaviour
 
         if (!File.Exists(filePath))
         {
-            Debug.LogError($"{entry.Name} - {filePath} does not exist");
-            UmaViewerUI.Instance?.ShowMessage(
-                $"{entry.Name} - {filePath} does not exist",
-                UIMessageType.Error);
+            // 通过统一错误管理器报告资源文件缺失，并展示中文/英文排查建议与频控
+            UmaErrorManager.ReportMissingResource(entry, filePath);
             return false;
         }
 
@@ -254,10 +262,8 @@ public class UmaAssetManager : MonoBehaviour
             if (bundle == null)
             {
                 stream?.Dispose();
-                Debug.LogError(filePath + " exists and doesn't work");
-                UmaViewerUI.Instance?.ShowMessage(
-                    filePath + " exists and doesn't work",
-                    UIMessageType.Error);
+                // 统一报告 AssetBundle 加载为空或损坏异常
+                UmaErrorManager.ReportBundleLoadError(entry, filePath, new Exception("AssetBundle is null or corrupted."));
                 return false;
             }
 
@@ -288,7 +294,8 @@ public class UmaAssetManager : MonoBehaviour
             handle.Stream = null;
             handle.IsLoaded = false;
             handle.RefCount = 0;
-            Debug.LogException(exception);
+            // 统一报告 AssetBundle 解析与加载过程中的未捕获异常
+            UmaErrorManager.ReportBundleLoadError(entry, filePath, exception);
             return false;
         }
     }

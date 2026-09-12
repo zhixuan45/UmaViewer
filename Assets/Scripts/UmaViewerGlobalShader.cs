@@ -111,8 +111,15 @@ public class UmaViewerGlobalShader : MonoBehaviour
         _ColorArray.Add(_ColorArray_9);
         Shader.SetGlobalVectorArray("_ColorArray", _ColorArray);
 
+        // 全局雾效除零安全防御：若 FogLength 接近或等于 0，则赋以极大安全距离（100000f），防止 GPU 计算除以零导致远景天空盒被死白雾效全屏吞噬
+        Vector4 safeFogLength = _Global_FogLength;
+        if (Mathf.Abs(safeFogLength.x) < 0.0001f) safeFogLength.x = 100000f;
+        if (Mathf.Abs(safeFogLength.y) < 0.0001f) safeFogLength.y = 100000f;
+        if (Mathf.Abs(safeFogLength.z) < 0.0001f) safeFogLength.z = 100000f;
+        if (Mathf.Abs(safeFogLength.w) < 0.0001f) safeFogLength.w = 100000f;
+
         Shader.SetGlobalVector("_Global_FogMinDistance", _Global_FogMinDistance);
-        Shader.SetGlobalVector("_Global_FogLength", _Global_FogLength);
+        Shader.SetGlobalVector("_Global_FogLength", safeFogLength);
 
         _DirtRate.Clear();
         _DirtRate.Add(_DirtRate_0);
