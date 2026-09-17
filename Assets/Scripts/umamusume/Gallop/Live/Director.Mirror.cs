@@ -99,7 +99,7 @@ namespace Gallop.Live
             for (int i = 0; i < _mirrorReflections.Count; i++)
             {
                 var mirror = _mirrorReflections[i];
-                if (mirror == null) continue;
+                if (mirror == null || !mirror.isActiveAndEnabled) continue;
 
                 mirror.SetBaseCamera(mainCam);
                 mirror.SetFovFactorGetter(GetMainCameraFovFactor);

@@ -64,7 +64,7 @@ namespace Gallop.Live
 
         [Header("BgColor direct driver")]
         [SerializeField] private bool _enableBgColorDriver = false;
-        [SerializeField] private bool _bgColorFallbackToAllEligible = true;
+        [SerializeField] private bool _bgColorFallbackToAllEligible = false;
         [SerializeField] private bool _bgColorVerboseLog = false;
         [SerializeField] private float[] _bgColorExtraValueTable = new float[] { 1f };
         [SerializeField] private BgColorBindingOverride[] _bgColorBindingOverrides;
@@ -79,6 +79,9 @@ namespace Gallop.Live
         private readonly Dictionary<Material, List<BgColor2RuntimeBinding>> _bindingsBySharedMaterialRef = new Dictionary<Material, List<BgColor2RuntimeBinding>>();
         private readonly Dictionary<string, List<BgColor2RuntimeBinding>> _bindingsBySharedMaterialName = new Dictionary<string, List<BgColor2RuntimeBinding>>(StringComparer.OrdinalIgnoreCase);
 
+        private StageColorBinder _stageColorBinder;
+        private readonly List<Renderer> _bgColor1ExactHits = new List<Renderer>(32);
+
         public void OnUpdateBgColor1(ref BgColor1UpdateInfo updateInfo)
         {
             UpdateBgColor1(ref updateInfo);
@@ -89,71 +92,62 @@ namespace Gallop.Live
             if (!_enableBgColorDriver)
                 return;
 
-            string tlNameLower = (updateInfo.TimelineName ?? "").ToLowerInvariant();
-            bool timelineIsSky = tlNameLower.Contains("sky");
+            EnsureStageColorBinder();
+            StageColorLane lane = StageColorLane.FromTimeline(updateInfo.TimelineName, updateInfo.TimelineNameHash);
 
-            // 核心重构：天空相关变色优先派发逻辑！
-            // 原逻辑在 targets 判空后导致天空深层子节点变色被过早拦截。
-            // 现将其前置为第一优先级派发逻辑，确保当 updateInfo.TimelineName 包含 sky
-            // （如 sky_base_00, sky_grad_00, cmn_sky002）时，100% 能够将变色数据派发给 StageSkyController！
-            if (timelineIsSky)
-            {
-                var skyCtrl = GetComponent<StageSkyController>() ?? GetComponentInChildren<StageSkyController>();
-                if (skyCtrl != null)
-                {
-                    skyCtrl.OnUpdateBgColor1(ref updateInfo);
-                }
-            }
-
-            var targets = ResolveBgColorRenderers(updateInfo.TimelineName, wantBgColor2Style: false);
-
-            // 运行时诊断：仅在显式开启全局诊断时记录，彻底消灭热循环中的日志与开销
-            if (StageRuntimeDiagnostics.EnableDiagnostics)
-            {
-                StageRuntimeDiagnostics.LogBgColorHit(updateInfo.TimelineName, 1, targets, updateInfo.color, updateInfo.colorPower);
-            }
-
-            if (targets == null || targets.Count == 0)
+            // 角色色只给角色，舞台/天空/草地一律不写。
+            if (lane.Kind == StageColorLaneKind.Character)
                 return;
 
-            for (int i = 0; i < targets.Count; i++)
+            if (lane.Kind == StageColorLaneKind.Ambient)
             {
-                var r = targets[i];
-                if (r == null) continue;
-
-                // 核心安全防护：严格遵循指示，部分物品（如天空球）绝不能被非天空光效污染
-                string rName = r.name.ToLowerInvariant();
-                if (!timelineIsSky && rName.Contains("sky"))
-                    continue;
-
-                // 天空渲染器已由 StageSkyController 专职采用 MaterialPropertyBlock 驱动，跳过避免重复设置
-                if (rName.Contains("sky"))
-                    continue;
-
-                // 核心性能优化：全面使用 sharedMaterials 替代 materials，杜绝深拷贝克隆材质与高频 GC 停顿，维持合批
-                Material[] mats;
-                try { mats = r.sharedMaterials; }
-                catch { continue; }
-                if (mats == null) continue;
-
-                for (int m = 0; m < mats.Length; m++)
-                {
-                    var mat = mats[m];
-                    if (mat == null) continue;
-
-                    if (mat.HasProperty("_CharaColor")) mat.SetColor("_CharaColor", updateInfo.color);
-                    if (mat.HasProperty("_ToonDarkColor")) mat.SetColor("_ToonDarkColor", updateInfo.toonDarkColor);
-                    if (mat.HasProperty("_ToonBrightColor")) mat.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
-                    if (mat.HasProperty("_OutlineColor")) mat.SetColor("_OutlineColor", updateInfo.outlineColor);
-                    if (mat.HasProperty("_Saturation")) mat.SetFloat("_Saturation", updateInfo.Saturation);
-                    if (mat.HasProperty("_ColorPower") && updateInfo.colorPower > 0f) mat.SetFloat("_ColorPower", updateInfo.colorPower);
-
-                    // 核心补全：天空网格与通用舞台材质使用的是 _BaseColor、_Color 或 _MulColor0
-                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", updateInfo.color);
-                    if (mat.HasProperty("_Color")) mat.SetColor("_Color", updateInfo.color);
-                    if (mat.HasProperty("_MulColor0")) mat.SetColor("_MulColor0", updateInfo.color);
-                }
+                ApplyAmbientLane(ref updateInfo);
+                return;
             }
+
+            if (lane.Kind == StageColorLaneKind.Sky)
+            {
+                StageSkyController skyCtrl = GetComponent<StageSkyController>() ?? GetComponentInChildren<StageSkyController>();
+                if (skyCtrl != null)
+                    skyCtrl.OnUpdateBgColor1(ref updateInfo);
+                return;
+            }
+
+            if (lane.Kind != StageColorLaneKind.Stage)
+                return;
+
+            // 按时间轴名字/FNV 精确命中；没命中就停，不再广播全部 eligible renderer。
+            if (!_stageColorBinder.TryFillExactHits(this, in lane, _bgColor1ExactHits))
+                return;
+
+            if (StageRuntimeDiagnostics.EnableDiagnostics)
+                StageRuntimeDiagnostics.LogBgColorHit(updateInfo.TimelineName, 1, _bgColor1ExactHits, updateInfo.color, updateInfo.colorPower);
+
+            for (int i = 0; i < _bgColor1ExactHits.Count; i++)
+            {
+                Renderer r = _bgColor1ExactHits[i];
+                if (r == null)
+                    continue;
+                _stageColorBinder.WriteMulColor(r, updateInfo.color, updateInfo.colorPower);
+            }
+        }
+
+        private void ApplyAmbientLane(ref BgColor1UpdateInfo updateInfo)
+        {
+            EnsureStageColorBinder();
+            float power = updateInfo.colorPower > 0f ? updateInfo.colorPower : 1f;
+            Color ambient = updateInfo.color * power;
+            _stageColorBinder.WriteAmbient(ambient);
+
+            Gallop.Cyalume.MobShadowController mob = GetComponentInChildren<Gallop.Cyalume.MobShadowController>(true);
+            if (mob != null)
+                mob.SetAmbientColor(ambient);
+        }
+
+        private void EnsureStageColorBinder()
+        {
+            if (_stageColorBinder == null)
+                _stageColorBinder = new StageColorBinder();
         }
 
         private void UpdateBgColor2(ref BgColor2UpdateInfo updateInfo)
@@ -343,6 +337,9 @@ namespace Gallop.Live
             _bgColor2Groups.Clear();
             _bindingsBySharedMaterialRef.Clear();
             _bindingsBySharedMaterialName.Clear();
+
+            EnsureStageColorBinder();
+            _stageColorBinder.Rebuild(this);
 
             var all = GetComponentsInChildren<Renderer>(true);
             for (int i = 0; i < all.Length; i++)
@@ -687,9 +684,14 @@ namespace Gallop.Live
 
         private List<Renderer> ResolveBgColorRenderers(string timelineName, bool wantBgColor2Style, bool allowAllEligibleFallback = true)
         {
+            // 开关只保留给 Inspector；无论它怎么设，都禁止全量回退。
+            if (_bgColorFallbackToAllEligible)
+                allowAllEligibleFallback = false;
+            allowAllEligibleFallback = false;
+
             string key = NormalizeKey(timelineName);
             if (string.IsNullOrEmpty(key))
-                return (_bgColorFallbackToAllEligible && allowAllEligibleFallback) ? _bgColorAllEligibleRenderers : null;
+                return null;
 
             if (_bgColorRendererCache.TryGetValue(key, out var cached))
                 return cached;
@@ -715,21 +717,6 @@ namespace Gallop.Live
             }
 
             var resolved = set.ToList();
-            if (resolved.Count == 0 && _bgColorFallbackToAllEligible && allowAllEligibleFallback)
-            {
-                // 全量回退广播时，严禁向天空与草地滥染造成白天化与荧光草地！
-                // 只有当 timelineName 明确包含 sky 或 grass 时才允许命中天空或草地。
-                bool timelineIsSky = key.Contains("sky");
-                bool timelineIsGrass = key.Contains("grass");
-
-                resolved = _bgColorAllEligibleRenderers.Where(r => {
-                    if (r == null) return false;
-                    string rn = r.name.ToLowerInvariant();
-                    if (!timelineIsSky && rn.Contains("sky")) return false;
-                    if (!timelineIsGrass && rn.Contains("grass")) return false;
-                    return wantBgColor2Style ? RendererHasBgColor2Props(r) : RendererHasBgColor1Props(r);
-                }).ToList();
-            }
 
             if (resolved.Count == 0)
             {

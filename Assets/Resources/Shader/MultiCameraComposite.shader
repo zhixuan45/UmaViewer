@@ -82,8 +82,9 @@ Shader "Hidden/UmaViewer/MultiCameraComposite"
                     }
                     else
                     {
-                        // 渐变过渡羽化模式 (Fade)
-                        float blendFactor = smoothstep(-halfThickness, halfThickness, dist);
+                        // 渐变过渡羽化模式 (Fade)：融合半厚度与抗锯齿羽化带，确保超高分辨率与斜切无锯齿撕裂
+                        float fadeSpan = max(feather, halfThickness);
+                        float blendFactor = smoothstep(-fadeSpan, fadeSpan, dist);
                         finalColor = lerp(col0, col1, blendFactor);
                     }
                 }

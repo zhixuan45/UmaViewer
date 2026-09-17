@@ -13,27 +13,25 @@ namespace Gallop.Live
         private GallopImageEffect _mainGallopImageEffect;
 
         /// <summary>
+        /// 公开暴露给渲染管线获取当前活跃主相机的 GallopImageEffect 后处理组件，杜绝漫游查找
+        /// </summary>
+        public GallopImageEffect ActiveGallopImageEffect => GetActivePostEffect();
+
+        /// <summary>
         /// 获取或动态挂载主相机的 GallopImageEffect 后处理组件
         /// </summary>
         private GallopImageEffect GetActivePostEffect()
         {
-            if (_mainGallopImageEffect != null)
-                return _mainGallopImageEffect;
-
-            Camera mainCamera = null;
-
-            if (_cameraObjects != null &&
-                _activeCameraIndex >= 0 &&
-                _activeCameraIndex < _cameraObjects.Length)
-            {
-                mainCamera = _cameraObjects[_activeCameraIndex];
-            }
-
-            if (mainCamera == null)
-                mainCamera = Camera.main;
+            Camera mainCamera = ResolveActiveLiveCamera();
 
             if (mainCamera == null)
                 return null;
+
+            if (_mainGallopImageEffect != null &&
+                _mainGallopImageEffect.gameObject == mainCamera.gameObject)
+            {
+                return _mainGallopImageEffect;
+            }
 
             _mainGallopImageEffect =
                 mainCamera.GetComponent<GallopImageEffect>();
@@ -46,6 +44,20 @@ namespace Gallop.Live
             }
 
             return _mainGallopImageEffect;
+        }
+
+        private Camera ResolveActiveLiveCamera()
+        {
+            if (_cameraObjects != null &&
+                _activeCameraIndex >= 0 &&
+                _activeCameraIndex < _cameraObjects.Length)
+            {
+                Camera timelineCamera = _cameraObjects[_activeCameraIndex];
+                if (timelineCamera != null)
+                    return timelineCamera;
+            }
+
+            return Camera.main;
         }
 
         /// <summary>
@@ -95,6 +107,19 @@ namespace Gallop.Live
 
             param.DiffusionContrast =
                 updateInfo.diffusionContrast;
+
+            imageEffect.ApplyBloomParameter();
+        }
+
+        /// <summary>
+        /// 时间轴 HDR 泛光事件驱动回调（驱动 HdrBloom 轨道）
+        /// </summary>
+        private void OnUpdateHdrBloom(ref HdrBloomUpdateInfo updateInfo)
+        {
+            GallopImageEffect imageEffect = GetActivePostEffect();
+            if (imageEffect == null) return;
+
+            imageEffect.UpdateHdrBloom(updateInfo.enable, updateInfo.intensity, updateInfo.blurSpread);
         }
 
         /// <summary>
@@ -107,6 +132,9 @@ namespace Gallop.Live
 
             _liveTimelineControl.OnUpdatePostEffect_BloomDiffusion -=
                 OnUpdatePostEffect_BloomDiffusion;
+
+            _liveTimelineControl.OnUpdateHdrBloom -=
+                OnUpdateHdrBloom;
         }
     }
 }

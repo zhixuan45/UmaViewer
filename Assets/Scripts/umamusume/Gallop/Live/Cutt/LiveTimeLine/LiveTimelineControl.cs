@@ -101,6 +101,17 @@ namespace Gallop.Live.Cutt
         private static Func<LiveTimelineKeyCameraLookAtData, LiveTimelineControl, Vector3, FindTimelineConfig, Vector3> fnGetCameraLookAtValue = GetCameraLookAtValue;
 
         private Vector3 _cameraLayerOffset = Vector3.zero;
+        private Vector3 _cameraPosLayerOffset = Vector3.zero;
+        private Vector3 _cameraLookAtLayerOffset = Vector3.zero;
+        private int _currentCameraPosKeyFrame;
+        private int _currentCameraLookAtKeyFrame;
+        private Vector3 _cameraLayerOffsetMin = Vector3.zero;
+        private Vector3 _cameraLayerOffsetDiff = Vector3.zero;
+
+        public Vector3 CameraLayerOffsetMin => _cameraLayerOffsetMin;
+        public Vector3 CameraLayerOffsetDiff => _cameraLayerOffsetDiff;
+        public int CurrentCameraPosKeyFrame => _currentCameraPosKeyFrame;
+        public int CurrentCameraLookAtKeyFrame => _currentCameraLookAtKeyFrame;
 
         private CacheCamera[] _cameraArray = new CacheCamera[3];
 
@@ -214,6 +225,26 @@ namespace Gallop.Live.Cutt
         public ILiveTimelineCharactorLocator[] liveCharactorLocators => _liveCharactorLocators;
 
         private ILiveTimelineCharactorLocator[] _liveCharactorLocators = new ILiveTimelineCharactorLocator[liveCharaPositionMax];
+
+        /// <summary>
+        /// 注册指定站位角色的时间轴定位器（Locator）
+        /// </summary>
+        public void SetCharactorLocator(int index, ILiveTimelineCharactorLocator locator)
+        {
+            if (index < 0 || index >= _liveCharactorLocators.Length)
+            {
+                return;
+            }
+
+            if (locator == null)
+            {
+                _liveCharactorLocators[index] = null;
+                return;
+            }
+
+            locator.liveCharaStandingPosition = (LiveCharaPosition)index;
+            _liveCharactorLocators[index] = locator;
+        }
 
         public Vector3 liveStageCenterPos => _liveStageCenterPos;
 
@@ -335,8 +366,19 @@ namespace Gallop.Live.Cutt
             AlterUpdate_CameraSwitcher(camSheet, _currentFrame);
             AlterUpdate_CameraPos(camSheet, _currentFrame);
             AlterUpdate_CameraLookAt(camSheet, _currentFrame, ref outLookAt);
-            AlterUpdate_CameraFov(camSheet, _currentFrame);
+
+            // 官方Cutt算法：在基础机位与注视点计算完成后，在相机自身旋转局部空间施加身高层级微调偏移
+            CacheCamera targetCamera = GetCamera(camSheet.targetCameraIndex);
+            if (targetCamera != null && targetCamera.cacheTransform != null)
+            {
+                Transform cameraTransform = targetCamera.cacheTransform;
+                cameraTransform.position += cameraTransform.rotation * _cameraPosLayerOffset;
+                outLookAt += cameraTransform.rotation * _cameraLookAtLayerOffset;
+                cameraTransform.LookAt(outLookAt, Vector3.up);
+            }
+
             AlterUpdate_CameraRoll(camSheet, _currentFrame);
+            AlterUpdate_CameraFov(camSheet, _currentFrame);
             // 调度多机位：分屏图层分割线、多机位各路相机位置与朝向
             AlterUpdate_MultiCamera(camSheet, _currentFrame);
             // 调度舞台监视器摄像机位置与注视点

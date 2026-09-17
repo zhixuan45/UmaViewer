@@ -70,29 +70,24 @@ namespace Gallop.Live
 
         public Transform MainCameraTransform => _mainCameraTransform;
 
-        private Transform _mainCameraTransform;
-
         /// <summary>
-        /// 全局复用的 MaterialPropertyBlock 实例，消灭 OnUpdateGlobalLight 和 OnUpdateBgColor1 每帧循环中的 new 堆内存分配。
-        /// 注意：Unity 禁止在 MonoBehaviour 构造函数与实例字段初始化阶段创建 MaterialPropertyBlock
-        /// （否则抛出 "CreateImpl is not allowed to be called from a MonoBehaviour constructor"，
-        /// 且字段会停留在 null，导致后续访问空引用），因此这里改为首次访问时的惰性创建。
+        /// 当前激活的 Live 主相机对象引用
         /// </summary>
-        private MaterialPropertyBlock _sharedPropertyBlock;
-
-        /// <summary>
-        /// 惰性获取复用的 MaterialPropertyBlock，避免构造函数阶段触发 Unity 原生对象创建限制
-        /// </summary>
-        private MaterialPropertyBlock SharedPropertyBlock
+        public Camera CurrentMainCamera
         {
             get
             {
-                if (_sharedPropertyBlock == null)
-                    _sharedPropertyBlock = new MaterialPropertyBlock();
-
-                return _sharedPropertyBlock;
+                if (_cameraObjects != null && _activeCameraIndex >= 0 && _activeCameraIndex < _cameraObjects.Length)
+                {
+                    return _cameraObjects[_activeCameraIndex];
+                }
+                return Camera.main;
             }
         }
+
+        private Transform _mainCameraTransform;
+
+        // 角色色与全局光的 MaterialPropertyBlock 缓存在 Director.CharaColor.cs 中按 renderer 叠加维护。
 
         private static readonly Dictionary<string, UmaDatabaseEntry> _laserBundleCache
             = new Dictionary<string, UmaDatabaseEntry>();
@@ -246,93 +241,8 @@ namespace Gallop.Live
                 }
             };
 
-            _liveTimelineControl.OnUpdateGlobalLight += delegate (ref GlobalLightUpdateInfo updateInfo)
-            {
-                var tmpPos = -(updateInfo.lightRotation * Vector3.forward).normalized;
-                foreach (var locator in _liveTimelineControl.liveCharactorLocators)
-                {
-                    if (locator != null && updateInfo.flags.hasFlag(locator.liveCharaStandingPosition) && locator is LiveTimelineCharaLocator charaLocator)
-                    {
-                        var container = charaLocator.UmaContainer;
-                        if (container)
-                        {
-                            SharedPropertyBlock.Clear();
-                            SharedPropertyBlock.SetFloat("_RimShadowRate", updateInfo.globalRimShadowRate);
-                            SharedPropertyBlock.SetColor("_RimColor", updateInfo.rimColor);
-                            SharedPropertyBlock.SetFloat("_RimStep", updateInfo.rimStep);
-                            SharedPropertyBlock.SetFloat("_RimFeather", updateInfo.rimFeather);
-                            SharedPropertyBlock.SetFloat("_RimSpecRate", updateInfo.rimSpecRate);
-                            SharedPropertyBlock.SetFloat("_RimHorizonOffset", updateInfo.RimHorizonOffset);
-                            SharedPropertyBlock.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
-                            SharedPropertyBlock.SetFloat("_RimHorizonOffset2", updateInfo.RimHorizonOffset2);
-                            SharedPropertyBlock.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
-                            SharedPropertyBlock.SetColor("_RimColor2", updateInfo.rimColor2);
-                            SharedPropertyBlock.SetFloat("_RimStep2", updateInfo.rimStep2);
-                            SharedPropertyBlock.SetFloat("_RimFeather2", updateInfo.rimFeather2);
-                            SharedPropertyBlock.SetFloat("_RimSpecRate2", updateInfo.rimSpecRate2);
-                            SharedPropertyBlock.SetFloat("_RimShadowRate2", updateInfo.globalRimShadowRate2);
-                            // 逐帧、逐 Renderer 访问 renderer.materials 会克隆出整整一份材质数组
-                            // （并永久打断批处理），是本回调里最重的托管分配来源。
-                            // 这两项本来就只需要"逐 Renderer 覆盖"，改用上面同一个 MaterialPropertyBlock 下发：
-                            // 语义等价，开销降为一次 SetPropertyBlock，且不再产生任何托管分配。
-                            SharedPropertyBlock.SetFloat("_UseOriginalDirectionalLight", 1f);
-                            SharedPropertyBlock.SetVector("_OriginalDirectionalLightDir", tmpPos);
-
-                            foreach (var renderer in container.Renderers)
-                            {
-                                renderer.SetPropertyBlock(_sharedPropertyBlock);
-                            }
-                        }
-                    }
-                }
-            };
-
-            _liveTimelineControl.OnUpdateBgColor1 += delegate (ref BgColor1UpdateInfo updateInfo)
-            {
-                // 角色安全保护过滤：
-                // 仅处理属于角色的 BgColor1 轨道，若轨道名称为空或非角色轨道，则直接返回；
-                // 避免天空（如 sky_base_00、sky_grad_00、pfb_env_live_cmn_sky002）或舞台物体的深蓝/白天颜色污染角色材质。
-                if (string.IsNullOrEmpty(updateInfo.TimelineName))
-                {
-                    return;
-                }
-
-                // 判断是否为角色轨道：
-                // 1. 轨道名称包含 "chara"（不区分大小写）；
-                // 2. 或处于常用的角色轨道名集合（如 CharaCenter, CharaLeft, CharaRight, CharaColor 等）中。
-                bool isCharaTrack = updateInfo.TimelineName.IndexOf("chara", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                    string.Equals(updateInfo.TimelineName, "CharaCenter", System.StringComparison.OrdinalIgnoreCase) ||
-                                    string.Equals(updateInfo.TimelineName, "CharaLeft", System.StringComparison.OrdinalIgnoreCase) ||
-                                    string.Equals(updateInfo.TimelineName, "CharaRight", System.StringComparison.OrdinalIgnoreCase) ||
-                                    string.Equals(updateInfo.TimelineName, "CharaColor", System.StringComparison.OrdinalIgnoreCase);
-
-                if (!isCharaTrack)
-                {
-                    return;
-                }
-
-                foreach (var locator in _liveTimelineControl.liveCharactorLocators)
-                {
-                    var EFlags = (LiveCharaPositionFlag)updateInfo.flags;
-                    if (locator != null && (updateInfo.flags == 0 || EFlags.hasFlag(locator.liveCharaStandingPosition)) && locator is LiveTimelineCharaLocator charaLocator)
-                    {
-                        var container = charaLocator.UmaContainer;
-                        if (container)
-                        {
-                            SharedPropertyBlock.Clear();
-                            SharedPropertyBlock.SetColor("_CharaColor", updateInfo.color);
-                            SharedPropertyBlock.SetColor("_ToonDarkColor", updateInfo.toonDarkColor);
-                            SharedPropertyBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
-                            SharedPropertyBlock.SetColor("_OutlineColor", updateInfo.outlineColor);
-                            SharedPropertyBlock.SetFloat("_Saturation", updateInfo.Saturation);
-                            foreach (var renderer in container.Renderers)
-                            {
-                                renderer.SetPropertyBlock(_sharedPropertyBlock);
-                            }
-                        }
-                    }
-                }
-            };
+            _liveTimelineControl.OnUpdateGlobalLight += OnUpdateGlobalLight;
+            _liveTimelineControl.OnUpdateBgColor1 += OnUpdateBgColor1;
 
             SetupCharacterLocator();
             // 在参演马娘组装与定位器就绪后，初始化全局手持道具装配
@@ -351,6 +261,7 @@ namespace Gallop.Live
                 }
             }
             _liveTimelineControl.OnUpdatePostEffect_BloomDiffusion += OnUpdatePostEffect_BloomDiffusion;
+            _liveTimelineControl.OnUpdateHdrBloom += OnUpdateHdrBloom;
 
 
             _liveTimelineControl.OnUpdateCameraSwitcher += delegate (int cameraIndex_)
@@ -410,13 +321,23 @@ namespace Gallop.Live
         private void SetupCharacterLocator()
         {
             if (!_liveTimelineControl) return;
-            for (int i = 0; i < CharaContainerScript.Count; i++)
+            int count = Mathf.Min(CharaContainerScript.Count, 20);
+            for (int i = 0; i < count; i++)
             {
                 var container = CharaContainerScript[i];
-                container.LiveLocator = new LiveTimelineCharaLocator(container);
+                if (container == null) continue;
+
+                if (container.LiveLocator == null)
+                {
+                    container.LiveLocator = new LiveTimelineCharaLocator(container);
+                }
                 container.LiveLocator.liveCharaStandingPosition = (LiveCharaPosition)i;
-                _liveTimelineControl.liveCharactorLocators[i] = container.LiveLocator;
-                container.LiveLocator.liveCharaInitialPosition = container.transform.position;
+                _liveTimelineControl.SetCharactorLocator(i, container.LiveLocator);
+            }
+
+            for (int i = count; i < 20; i++)
+            {
+                _liveTimelineControl.SetCharactorLocator(i, null);
             }
         }
 

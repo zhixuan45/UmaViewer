@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 
 namespace Gallop.Live
@@ -27,95 +25,57 @@ namespace Gallop.Live
 
             Material[] loadedMaterialsCache = null;
 
-            foreach (var r in renderers)
+            for (int ri = 0; ri < renderers.Length; ri++)
             {
+                var r = renderers[ri];
                 if (r == null)
                     continue;
 
-                // 检测 sharedMaterial == null、sharedMaterials 包含 null，或者材质的 Shader 损坏
+                // 只修 sharedMaterials 里为 null 的槽。URP 下 Gallop 着色器经常 isSupported=false，不能当损坏。
                 var sharedMats = r.sharedMaterials;
-                bool hasInvalid = false;
-
                 if (sharedMats == null || sharedMats.Length == 0)
-                {
-                    hasInvalid = true;
-                }
-                else
-                {
-                    for (int i = 0; i < sharedMats.Length; i++)
-                    {
-                        var mat = sharedMats[i];
-                        if (mat == null || mat.shader == null || !mat.shader.isSupported || mat.shader.name == "Hidden/InternalErrorShader")
-                        {
-                            hasInvalid = true;
-                            break;
-                        }
-                    }
-                }
-
-                // 若材质正常存在且着色器完整，绝不强行覆盖修改其原有材质或底色
-                if (!hasInvalid)
                     continue;
 
-                bool isSky = (r.name ?? "").IndexOf("sky", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                             (partName ?? "").IndexOf("sky", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool hasNullSlot = false;
+                for (int i = 0; i < sharedMats.Length; i++)
+                {
+                    if (sharedMats[i] == null)
+                    {
+                        hasNullSlot = true;
+                        break;
+                    }
+                }
+                if (!hasNullSlot)
+                    continue;
 
-                Debug.LogWarning($"[StageController] 舞台部件 '{partName}' 下的渲染器 '{r.name}' (isSky={isSky}) 存在空材质或着色器损坏，正在尝试安全修复...");
-
-                var fixedMats = (sharedMats != null && sharedMats.Length > 0)
-                    ? (Material[])sharedMats.Clone()
-                    : new Material[1];
-
-                bool disableRenderer = false;
+                bool isSky = StageColorLane.NameLooksLikeSky(r.name) || StageColorLane.NameLooksLikeSky(partName);
+                var fixedMats = (Material[])sharedMats.Clone();
+                bool changed = false;
 
                 for (int i = 0; i < fixedMats.Length; i++)
                 {
-                    var mat = fixedMats[i];
-                    bool isCurrentInvalid = mat == null || mat.shader == null || !mat.shader.isSupported || mat.shader.name == "Hidden/InternalErrorShader";
-                    if (!isCurrentInvalid)
+                    if (fixedMats[i] != null)
                         continue;
 
-                    // 1. 尝试从当前内存中已载入的材质中查找相匹配的材质
                     if (loadedMaterialsCache == null)
-                    {
                         loadedMaterialsCache = Resources.FindObjectsOfTypeAll<Material>();
-                    }
 
-                    Material fallbackMat = FindMatchingLoadedMaterial(loadedMaterialsCache, r.name, partName);
+                    Material found = FindMatchingLoadedMaterial(loadedMaterialsCache, r.name, partName);
+                    if (found == null && !isSky)
+                        found = FindSiblingFallbackMaterial(renderers);
 
-                    // 2. 若未找到相匹配的已载入材质：
-                    // 注意：天空网格严格禁止从同部件中借用草地或普通物体材质，防止借错导致全屏错乱！
-                    if (fallbackMat == null && !isSky)
-                    {
-                        fallbackMat = FindSiblingFallbackMaterial(renderers);
-                    }
+                    // 天空找不到就保持 null，不造浅白 Unlit，也不关网格。
+                    if (found == null)
+                        continue;
+                    if (isSky && !StageColorLane.NameLooksLikeSky(found.name))
+                        continue;
 
-                    // 3. 若仍未找到：
-                    // 如果是天空网格且没有任何可用天空材质，安全禁用该 Renderer，防止纯白无光照白模遮蔽整个舞台背景！
-                    if (fallbackMat == null)
-                    {
-                        if (isSky)
-                        {
-                            Debug.LogWarning($"[StageController] 天空网格 '{r.name}' 缺少天空专用材质，为防止白模遮蔽全屏，安全禁用该渲染器。");
-                            disableRenderer = true;
-                            break;
-                        }
-
-                        fallbackMat = CreateSafeFallbackMaterial(r.name);
-                    }
-
-                    fixedMats[i] = fallbackMat;
+                    fixedMats[i] = found;
+                    changed = true;
                 }
 
-                if (disableRenderer)
-                {
-                    r.enabled = false;
-                }
-                else
-                {
+                if (changed)
                     r.sharedMaterials = fixedMats;
-                    Debug.Log($"[StageController] 渲染器 '{r.name}' 材质已成功修复为安全材质: {string.Join(", ", fixedMats.Select(m => m != null ? m.name : "null"))}");
-                }
             }
         }
 
@@ -190,36 +150,6 @@ namespace Gallop.Live
             }
 
             return null;
-        }
-
-        /// <summary>
-        /// 创建温和的基础无光照材质兜底。移除将天空网格强行刷为深死黑的逻辑，采用自然柔和的浅白/浅灰，
-        /// 确保材质缺失或着色器损坏时能够接受时间轴 BgColor 染色与光模糊（Bloom）后处理的晕染。
-        /// </summary>
-        private Material CreateSafeFallbackMaterial(string rendererName)
-        {
-            Shader safeShader = Shader.Find("Universal Render Pipeline/Unlit");
-            if (safeShader == null) safeShader = Shader.Find("Unlit/Color");
-            if (safeShader == null) safeShader = Shader.Find("Unlit/Texture");
-            if (safeShader == null) safeShader = Shader.Find("Sprites/Default");
-            if (safeShader == null) safeShader = Shader.Find("Hidden/InternalErrorShader");
-
-            Material mat = (safeShader != null) ? new Material(safeShader) : new Material(Shader.Find("Standard"));
-            mat.name = $"Fallback_SafeUnlit_{rendererName ?? "unknown"}";
-
-            // 采用自然柔和的浅白/浅灰色作为底色，允许时间轴的 BgColor 颜色乘法与 Bloom 辉光正常呈现
-            Color fallbackColor = new Color(0.9f, 0.9f, 0.9f, 1f);
-
-            if (mat.HasProperty("_BaseColor"))
-            {
-                mat.SetColor("_BaseColor", fallbackColor);
-            }
-            else if (mat.HasProperty("_Color"))
-            {
-                mat.SetColor("_Color", fallbackColor);
-            }
-
-            return mat;
         }
     }
 }

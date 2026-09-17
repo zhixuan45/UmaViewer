@@ -300,6 +300,32 @@ namespace Gallop.Live
                    name.IndexOf("ledlight", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        // 天空/草地由 BgColor 管线负责。名称或材质名含 sky、cmn_sky、sky_base、sky_grad、grass、grassy 的 Renderer
+        // 不得进入闪灯缓存，Off 时也不得改 enabled。
+        internal static bool IsProtectedEnvironmentRenderer(Renderer r)
+        {
+            if (r == null) return false;
+            if (NameLooksLikeEnvironment(r.name)) return true;
+            if (r.gameObject != null && NameLooksLikeEnvironment(r.gameObject.name)) return true;
+
+            var mats = r.sharedMaterials;
+            if (mats == null) return false;
+            for (int i = 0; i < mats.Length; i++)
+            {
+                var m = mats[i];
+                if (m != null && NameLooksLikeEnvironment(m.name))
+                    return true;
+            }
+            return false;
+        }
+
+        internal static bool NameLooksLikeEnvironment(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            return name.IndexOf("sky", StringComparison.OrdinalIgnoreCase) >= 0
+                || name.IndexOf("grass", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private static IndexToken InvalidToken()
         {
             return new IndexToken { valid = false, mode = IndexMode.Invalid, n = 0 };
@@ -634,6 +660,9 @@ namespace Gallop.Live
                 var r = t.GetComponent<Renderer>();
                 if (r != null)
                 {
+                    // 只收闪灯树里的 light 编号节点，排除天空/草地，不用 _MulColor0 全台扫描。
+                    if (IsProtectedEnvironmentRenderer(r))
+                        continue;
                     bool isBlinkSimple, isUvAlphaMask, isLightAdd1, hasColorPowerMultiply, isLightBlinkBlend;
                     DetectType(r, out isBlinkSimple, out isUvAlphaMask, out isLightAdd1, out hasColorPowerMultiply, out isLightBlinkBlend);
 
@@ -875,6 +904,12 @@ namespace Gallop.Live
                 var e = rc.renderers[i];
                 var r = e.r;
                 if (r == null)
+                {
+                    rc.dirty = true;
+                    continue;
+                }
+
+                if (IsProtectedEnvironmentRenderer(r))
                 {
                     rc.dirty = true;
                     continue;
@@ -1267,6 +1302,13 @@ namespace Gallop.Live
                 var e = rc.renderers[i];
                 var r = e.r;
                 if (r == null)
+                {
+                    rc.dirty = true;
+                    continue;
+                }
+
+                // Off 只关闪灯，不碰天空/草地的 renderer.enabled。
+                if (IsProtectedEnvironmentRenderer(r))
                 {
                     rc.dirty = true;
                     continue;

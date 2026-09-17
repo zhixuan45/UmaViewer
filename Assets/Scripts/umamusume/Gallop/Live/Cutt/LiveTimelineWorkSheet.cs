@@ -99,7 +99,8 @@ namespace Gallop.Live.Cutt
         InitialHeightFace = 17,
         InitialHeightChest = 18,
         InitialHeightWaist = 19,
-        Max = 20
+        StartFrameFace = 20,
+        Max = 21
     }
 
     public enum LiveCameraCullingLayer
@@ -294,28 +295,72 @@ namespace Gallop.Live.Cutt
             return GetCullingMask(defCameraCullingLayer);
         }
 
+        [NonSerialized]
+        public Vector3 CharaPositionAtStartFrame;
+
         public virtual Vector3 GetValue(LiveTimelineControl timelineControl)
         {
-            return GetValue(timelineControl, setType, containOffset: true);
+            return GetValue(timelineControl, setType);
         }
 
-        protected virtual Vector3 GetValue(LiveTimelineControl timelineControl, LiveCameraPositionType type, bool containOffset)
+        private Vector3 GetValue(LiveTimelineControl timelineControl, LiveCameraPositionType type)
         {
-            Vector3 vector = position;
-            switch (type)
+            if (type == LiveCameraPositionType.Direct)
             {
-                case LiveCameraPositionType.Direct:
-                    vector += posDirect;
-                    break;
-                case LiveCameraPositionType.Character:
-                    vector += timelineControl.GetPositionWithCharacters(charaRelativeBase, charaRelativeParts, charaPos);
-                    break;
+                return position;
             }
-            if (!containOffset)
+
+            if (type != LiveCameraPositionType.Character)
             {
-                return vector;
+                return position;
             }
-            return vector + offset;
+
+            if (charaRelativeParts == LiveCameraCharaParts.StartFrameFace)
+            {
+                if (frame != (timelineControl != null ? timelineControl.CurrentCameraPosKeyFrame : 0))
+                {
+                    CharaPositionAtStartFrame =
+                        timelineControl != null
+                            ? timelineControl.GetPositionWithCharacters(
+                                charaRelativeBase,
+                                LiveCameraCharaParts.Face)
+                            : Vector3.zero;
+                }
+
+                return position + CharaPositionAtStartFrame;
+            }
+
+            return LiveTimelineKeyCameraLookAtData.GetCharacterWorldPos(
+                timelineControl,
+                charaRelativeBase,
+                charaRelativeParts,
+                charaPos,
+                position,
+                false,
+                0,
+                0);
+        }
+
+        public bool GetLayerOffset(LiveTimelineControl timelineControl, out Vector3 layerOffset)
+        {
+            layerOffset = Vector3.zero;
+
+            if (setType != LiveCameraPositionType.Character)
+            {
+                return false;
+            }
+
+            if (timelineControl == null)
+            {
+                return false;
+            }
+
+            return LiveTimelineControl.GetCameraLayerOffset(
+                timelineControl,
+                charaRelativeBase,
+                timelineControl.CameraLayerOffsetMin,
+                timelineControl.CameraLayerOffsetDiff,
+                out layerOffset);
         }
 
         public int GetBezierPointCount()

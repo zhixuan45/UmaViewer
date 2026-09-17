@@ -291,8 +291,8 @@ public static class UniversalLivePropsAndMultiCamAssertionTests
             skyCtrl.Initialize(stageCtrl);
 
             AssertTrue(skyCtrl.IsStage10147(stageCtrl), "IsStage10147 必须成功识别 10147 舞台");
-            AssertTrue(skyCtrl.CurrentMode == StageSkyMode.InvertCloudAlpha,
-                $"检测到 10147 舞台后，天空模式必须自动提升为 StageSkyMode.InvertCloudAlpha (当前模式: {skyCtrl.CurrentMode})");
+            AssertTrue(skyCtrl.CurrentMode == StageSkyMode.OfficialTimeline,
+                $"10147/1175 必须走官方时间轴天空模式，禁止自动反相云层 (当前模式: {skyCtrl.CurrentMode})");
 
             // 2. 模拟 StageController 的 _enableBgColorDriver 开启
             var enableField = typeof(StageController).GetField("_enableBgColorDriver",

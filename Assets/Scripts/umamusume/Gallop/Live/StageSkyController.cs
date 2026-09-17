@@ -29,6 +29,7 @@ namespace Gallop.Live
         [SerializeField] private Renderer _skyBaseRenderer;
         [SerializeField] private Renderer _skyGradRenderer;
         [SerializeField] private Renderer _cmnSkyRenderer;
+        private readonly List<Renderer> _namedSkyRenderers = new List<Renderer>(8);
 
         // 原始材质与贴图缓存（用于无损复原）
         private Material _originalGradMaterial;
@@ -45,10 +46,9 @@ namespace Gallop.Live
         private MaterialPropertyBlock _basePropertyBlock;
         private MaterialPropertyBlock _gradPropertyBlock;
         private MaterialPropertyBlock _cmnPropertyBlock;
+        private MaterialPropertyBlock _namedPropertyBlock;
 
         // Shader 属性 ID
-        private static readonly int PropColor = Shader.PropertyToID("_Color");
-        private static readonly int PropBaseColor = Shader.PropertyToID("_BaseColor");
         private static readonly int PropMulColor0 = Shader.PropertyToID("_MulColor0");
         private static readonly int PropColorPower = Shader.PropertyToID("_ColorPower");
 
@@ -94,6 +94,7 @@ namespace Gallop.Live
             _basePropertyBlock = new MaterialPropertyBlock();
             _gradPropertyBlock = new MaterialPropertyBlock();
             _cmnPropertyBlock = new MaterialPropertyBlock();
+            _namedPropertyBlock = new MaterialPropertyBlock();
         }
 
         private void Start()
@@ -161,68 +162,110 @@ namespace Gallop.Live
         /// <param name="updateInfo">时间轴下发的 BgColor1 数据</param>
         public void OnUpdateBgColor1(ref BgColor1UpdateInfo updateInfo)
         {
-            string tlName = updateInfo.TimelineName;
-            if (string.IsNullOrEmpty(tlName))
+            StageColorLane lane = StageColorLane.FromTimeline(updateInfo.TimelineName, updateInfo.TimelineNameHash);
+            if (lane.Kind != StageColorLaneKind.Sky)
                 return;
 
-            // 核心安全过滤：角色轨道（包含 chara）直接忽略，防止角色光效污染天空
-            if (tlName.IndexOf("chara", StringComparison.OrdinalIgnoreCase) >= 0)
-                return;
-
-            // 识别特定的天空部件轨道：
-            // 1. 基底天空球（如 sky_base_00）
-            // 2. 渐变云层网格（如 sky_grad_00）
-            // 3. 公共大天球（如 pfb_env_live_cmn_sky002、cmn_sky）
-            bool isSkyBase = tlName.IndexOf("sky_base", StringComparison.OrdinalIgnoreCase) >= 0;
-            bool isSkyGrad = tlName.IndexOf("sky_grad", StringComparison.OrdinalIgnoreCase) >= 0;
-            bool isCmnSky = tlName.IndexOf("cmn_sky", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            tlName.IndexOf("sky002", StringComparison.OrdinalIgnoreCase) >= 0;
-
-            // 通用天空轨道兜底（包含 sky 但未单独指定具体网格）
-            bool isGeneralSky = !isSkyBase && !isSkyGrad && !isCmnSky &&
-                                tlName.IndexOf("sky", StringComparison.OrdinalIgnoreCase) >= 0;
-
-            // 若完全与天空无关，则直接返回
-            if (!isSkyBase && !isSkyGrad && !isCmnSky && !isGeneralSky)
+            Renderer target = ResolveSkyRenderer(lane);
+            if (target == null)
                 return;
 
             Color col = updateInfo.color;
             float power = updateInfo.colorPower > 0f ? updateInfo.colorPower : 1f;
+            ApplyColorToRenderer(target, BlockFor(target), col, power);
+            RememberSkyColor(lane.SkyPart, col, power);
+        }
 
-            // 驱动基底天空球
-            if (isSkyBase || isGeneralSky)
+        private Renderer ResolveSkyRenderer(in StageColorLane lane)
+        {
+            switch (lane.SkyPart)
             {
-                if (_skyBaseRenderer != null)
-                {
-                    ApplyColorToRenderer(_skyBaseRenderer, _basePropertyBlock, col, power);
-                    _lastBaseColor = col;
-                    _lastBasePower = power;
-                    _hasBaseColor = true;
-                }
+                case StageSkyPart.Base:
+                    return _skyBaseRenderer;
+                case StageSkyPart.Grad:
+                    return _skyGradRenderer;
+                case StageSkyPart.Common:
+                    return _cmnSkyRenderer;
+                default:
+                    return FindNamedSkyRenderer(lane);
+            }
+        }
+
+        private Renderer FindNamedSkyRenderer(in StageColorLane lane)
+        {
+            Renderer exact = MatchSkyByHashOrName(_skyBaseRenderer, lane);
+            if (exact != null) return exact;
+            exact = MatchSkyByHashOrName(_skyGradRenderer, lane);
+            if (exact != null) return exact;
+            exact = MatchSkyByHashOrName(_cmnSkyRenderer, lane);
+            if (exact != null) return exact;
+
+            for (int i = 0; i < _namedSkyRenderers.Count; i++)
+            {
+                exact = MatchSkyByHashOrName(_namedSkyRenderers[i], lane);
+                if (exact != null)
+                    return exact;
             }
 
-            // 驱动渐变云层网格
-            if (isSkyGrad || isGeneralSky)
+            return null;
+        }
+
+        private static Renderer MatchSkyByHashOrName(Renderer renderer, in StageColorLane lane)
+        {
+            if (renderer == null)
+                return null;
+
+            string rendererName = StageColorBinder.StripCloneToken(renderer.name);
+            string objectName = renderer.gameObject != null ? StageColorBinder.StripCloneToken(renderer.gameObject.name) : rendererName;
+
+            if (!string.IsNullOrEmpty(lane.StrippedName))
             {
-                if (_skyGradRenderer != null)
-                {
-                    ApplyColorToRenderer(_skyGradRenderer, _gradPropertyBlock, col, power);
-                    _lastGradColor = col;
-                    _lastGradPower = power;
-                    _hasGradColor = true;
-                }
+                if (string.Equals(rendererName, lane.StrippedName, StringComparison.OrdinalIgnoreCase))
+                    return renderer;
+                if (string.Equals(objectName, lane.StrippedName, StringComparison.OrdinalIgnoreCase))
+                    return renderer;
             }
 
-            // 驱动公共天空天球
-            if (isCmnSky || isGeneralSky)
+            if (lane.FnvHash != 0)
             {
-                if (_cmnSkyRenderer != null)
-                {
-                    ApplyColorToRenderer(_cmnSkyRenderer, _cmnPropertyBlock, col, power);
-                    _lastCmnColor = col;
-                    _lastCmnPower = power;
-                    _hasCmnColor = true;
-                }
+                if (FNVHash.Generate(rendererName) == lane.FnvHash)
+                    return renderer;
+                if (!string.IsNullOrEmpty(objectName) && FNVHash.Generate(objectName) == lane.FnvHash)
+                    return renderer;
+            }
+
+            return null;
+        }
+
+        private MaterialPropertyBlock BlockFor(Renderer renderer)
+        {
+            if (renderer == _skyBaseRenderer) return _basePropertyBlock;
+            if (renderer == _skyGradRenderer) return _gradPropertyBlock;
+            if (renderer == _cmnSkyRenderer) return _cmnPropertyBlock;
+            if (_namedPropertyBlock == null)
+                _namedPropertyBlock = new MaterialPropertyBlock();
+            return _namedPropertyBlock;
+        }
+
+        private void RememberSkyColor(StageSkyPart part, Color col, float power)
+        {
+            if (part == StageSkyPart.Base)
+            {
+                _lastBaseColor = col;
+                _lastBasePower = power;
+                _hasBaseColor = true;
+            }
+            else if (part == StageSkyPart.Grad)
+            {
+                _lastGradColor = col;
+                _lastGradPower = power;
+                _hasGradColor = true;
+            }
+            else if (part == StageSkyPart.Common)
+            {
+                _lastCmnColor = col;
+                _lastCmnPower = power;
+                _hasCmnColor = true;
             }
         }
 
@@ -236,13 +279,9 @@ namespace Gallop.Live
                 return;
 
             r.GetPropertyBlock(block);
-            block.SetColor(PropColor, color);
-            block.SetColor(PropBaseColor, color);
             block.SetColor(PropMulColor0, color);
             if (power > 0f)
-            {
                 block.SetFloat(PropColorPower, power);
-            }
             r.SetPropertyBlock(block);
         }
 
@@ -313,6 +352,8 @@ namespace Gallop.Live
                 }
             }
 
+            CollectNamedSkyRenderers(candidateRenderers);
+
             // 缓存云层网格的原始材质与贴图
             if (_skyGradRenderer != null && _skyGradRenderer.sharedMaterial != null)
             {
@@ -327,12 +368,8 @@ namespace Gallop.Live
                 SetupInvertedMaterial();
             }
 
-            // 核心自适应逻辑：智能识别 10147 舞台（如 1175 Live），自动将默认模式提升为云层反相模式
-            if (IsStage10147(stageController, candidateRenderers))
-            {
-                _currentMode = StageSkyMode.InvertCloudAlpha;
-                Debug.Log("[StageSkyController] 自适应检测到 10147 舞台，自动激活云层透明度反相模式 (StageSkyMode.InvertCloudAlpha)");
-            }
+            // 10147/1175 也走官方时间轴，不自动反相云层 Alpha。
+            _currentMode = StageSkyMode.OfficialTimeline;
 
             _isInitialized = true;
 
@@ -353,6 +390,26 @@ namespace Gallop.Live
         /// <param name="stageController">关联的舞台控制器实例</param>
         /// <param name="candidateRenderers">收集到的候选天空与场景渲染器列表</param>
         /// <returns>若判定为 10147 舞台则返回 true</returns>
+        private void CollectNamedSkyRenderers(List<Renderer> candidateRenderers)
+        {
+            _namedSkyRenderers.Clear();
+            if (candidateRenderers == null)
+                return;
+
+            for (int i = 0; i < candidateRenderers.Count; i++)
+            {
+                Renderer r = candidateRenderers[i];
+                if (r == null)
+                    continue;
+                if (r == _skyBaseRenderer || r == _skyGradRenderer || r == _cmnSkyRenderer)
+                    continue;
+                if (!StageColorLane.NameLooksLikeSky(r.name) && !StageColorLane.NameLooksLikeSky(r.gameObject.name))
+                    continue;
+                if (!_namedSkyRenderers.Contains(r))
+                    _namedSkyRenderers.Add(r);
+            }
+        }
+
         public bool IsStage10147(StageController stageController, IEnumerable<Renderer> candidateRenderers = null)
         {
             // 1. 检测 Director 当前 Live 歌曲或背景 ID

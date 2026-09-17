@@ -220,7 +220,8 @@ namespace Gallop.Live.Cutt
                 LiveTimelineKeyBgColor1Data bgColorData2 = nextKey as LiveTimelineKeyBgColor1Data;
 
                 updateInfo.TimelineName = sheet.bgColor1List[i].name;
-                updateInfo.TimelineNameHash = !string.IsNullOrEmpty(updateInfo.TimelineName) ? Animator.StringToHash(updateInfo.TimelineName) : 0;
+                // 舞台物体按 FNV-1a 建索引，这里必须同一套哈希，不能用 Animator.StringToHash。
+                updateInfo.TimelineNameHash = string.IsNullOrEmpty(updateInfo.TimelineName) ? 0 : FNVHash.Generate(updateInfo.TimelineName);
                 updateInfo.TargetCharaIdArray = sheet.bgColor1List[i].TargetCharaIdArray;
                 updateInfo.TargetDressIdArray = sheet.bgColor1List[i].TargetDressIdArray;
                 updateInfo.IsSilhouette = bgColorData != null && bgColorData.IsSilhouette;
@@ -395,7 +396,7 @@ namespace Gallop.Live.Cutt
 
                 BgColor2UpdateInfo updateInfo = default;
                 updateInfo.TimelineName = bgData.name;
-                updateInfo.TimelineNameHash = !string.IsNullOrEmpty(bgData.name) ? Animator.StringToHash(bgData.name) : 0;
+                updateInfo.TimelineNameHash = string.IsNullOrEmpty(bgData.name) ? 0 : FNVHash.Generate(bgData.name);
                 updateInfo.color1 = curColor1;
                 updateInfo.color2 = curColor2;
                 updateInfo.power = cur.power;

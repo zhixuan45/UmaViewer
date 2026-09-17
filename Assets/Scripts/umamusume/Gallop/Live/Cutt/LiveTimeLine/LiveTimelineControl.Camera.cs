@@ -6,7 +6,9 @@ using Gallop.Live;
 namespace Gallop.Live.Cutt
 {
     /// <summary>
-    /// LiveTimelineControl 分部类：负责时间轴镜头切换、机位定位与注视点、FOV以及多机位控制
+    /// LiveTimelineControl 相机控制分部类：
+    /// 负责时间轴镜头切换、机位定位与注视点计算、FOV/Roll控制、角色身体部位世界坐标解算以及多机位支持
+    /// 算法严格对齐官方 Cutt 算法，消除坐标重复累加导致的镜头严重偏移
     /// </summary>
     public partial class LiveTimelineControl : MonoBehaviour
     {
@@ -28,7 +30,6 @@ namespace Gallop.Live.Cutt
             return _multiCameraCache[index].cacheTransform.position;
         }
 
-
         public bool ExistsMultiCamera(int index)
         {
             if (_multiCameraCache != null && index < _multiCameraCache.Length)
@@ -40,280 +41,317 @@ namespace Gallop.Live.Cutt
 
         public float GetCharacterHeight(LiveCharaPosition position)
         {
-            return liveCharactorLocators[(int)position].liveCharaHeightValue;
+            int index = (int)position;
+            if (index >= 0 && index < liveCharactorLocators.Length && liveCharactorLocators[index] != null)
+            {
+                return liveCharactorLocators[index].liveCharaHeightValue;
+            }
+            return 160f;
         }
 
-        public Vector3 GetPositionWithCharacters(LiveCharaPositionFlag posFlags, LiveCameraCharaParts parts, Vector3 charaPos, Vector3 cameraOffset)
+        /// <summary>
+        /// 官方标准实现：根据角色站位掩码和身体部位获取对应的目标世界坐标
+        /// 绝不在此方法中额外叠加任何 charaPos 或 layerOffset，防止多重坐标叠加
+        /// </summary>
+        public Vector3 GetPositionWithCharacters(LiveCharaPositionFlag posFlags, LiveCameraCharaParts parts)
         {
             Vector3 retPos = Vector3.zero;
-            Vector3 tmpPos = Vector3.zero;
             if (posFlags == 0)
             {
-                retPos = liveStageCenterPos + charaPos;
-                tmpPos = liveStageCenterPos + charaPos;
+                return liveStageCenterPos;
             }
-            else
+
+            int num = 0;
+            switch (parts)
             {
-                int num = 0;
-                switch (parts)
-                {
-                    case LiveCameraCharaParts.Face:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    Vector3 headPos = liveCharactorLocators[i].liveCharaHeadPosition;
-                                    if (headPos.sqrMagnitude < 0.01f || (Mathf.Abs(headPos.x) < 0.01f && Mathf.Abs(headPos.z) < 0.01f))
-                                    {
-                                        headPos += charaPos;
-                                    }
-                                    retPos += headPos;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.Waist:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    Vector3 waistPos = liveCharactorLocators[i].liveCharaWaistPosition;
-                                    if (waistPos.sqrMagnitude < 0.01f || (Mathf.Abs(waistPos.x) < 0.01f && Mathf.Abs(waistPos.z) < 0.01f))
-                                    {
-                                        waistPos += charaPos;
-                                    }
-                                    retPos += waistPos;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.LeftHandWrist:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaLeftHandWristPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.LeftHandAttach:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaLeftHandAttachPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.RightHandWrist:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaRightHandWristPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.RightHandAttach:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaRightHandAttachPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.Chest:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    Vector3 chestPos = liveCharactorLocators[i].liveCharaChestPosition;
-                                    if (chestPos.sqrMagnitude < 0.01f || (Mathf.Abs(chestPos.x) < 0.01f && Mathf.Abs(chestPos.z) < 0.01f))
-                                    {
-                                        chestPos += charaPos;
-                                    }
-                                    retPos += chestPos;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.Foot:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos += liveCharactorLocators[i].liveCharaFootPosition;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.ConstFaceHeight:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos.y += liveCharactorLocators[i].liveCharaConstHeightHeadPosition.y;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += charaPos;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.ConstWaistHeight:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos.y += liveCharactorLocators[i].liveCharaConstHeightWaistPosition.y;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += charaPos;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.ConstChestHeight:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos.y += liveCharactorLocators[i].liveCharaConstHeightChestPosition.y;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += charaPos;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.ConstFootHeight:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    retPos.y += liveCharactorLocators[i].liveCharaFootPosition.y;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    retPos += charaPos;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.InitFaceHeight:
-                        {
-                            // 核心修复：对齐官方原版反编译实现，直接获取角色头部骨骼世界坐标，并在骨骼尚未就绪时以 charaPos 作为补偿
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    Vector3 headPos = liveCharactorLocators[i].liveCharaHeadPosition;
-                                    if (headPos.sqrMagnitude < 0.01f || (Mathf.Abs(headPos.x) < 0.01f && Mathf.Abs(headPos.z) < 0.01f))
-                                    {
-                                        headPos += charaPos;
-                                    }
-                                    retPos += headPos;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.InitChestHeight:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    Vector3 chestPos = liveCharactorLocators[i].liveCharaChestPosition;
-                                    if (chestPos.sqrMagnitude < 0.01f || (Mathf.Abs(chestPos.x) < 0.01f && Mathf.Abs(chestPos.z) < 0.01f))
-                                    {
-                                        chestPos += charaPos;
-                                    }
-                                    retPos += chestPos;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                    case LiveCameraCharaParts.InitWaistHeight:
-                        {
-                            for (int i = 0; i < liveCharaPositionMax; i++)
-                            {
-                                if (posFlags.hasFlag((LiveCharaPosition)i) && liveCharactorLocators[i] != null)
-                                {
-                                    Vector3 waistPos = liveCharactorLocators[i].liveCharaWaistPosition;
-                                    if (waistPos.sqrMagnitude < 0.01f || (Mathf.Abs(waistPos.x) < 0.01f && Mathf.Abs(waistPos.z) < 0.01f))
-                                    {
-                                        waistPos += charaPos;
-                                    }
-                                    retPos += waistPos;
-                                    retPos += cameraOffset * liveCharactorLocators[i].liveCharaHeightRatio;
-                                    num++;
-                                }
-                            }
-                            break;
-                        }
-                }
-                if (num > 1)
-                {
-                    retPos /= (float)num;
-                }
-                else if (num == 0)
-                {
-                    // 若未命中任何有效角色定位器，安全回退至舞台中心叠加关键帧站位，杜绝归零导致镜头跌入虚空
-                    retPos = liveStageCenterPos + charaPos;
-                }
-                /*
-                if ((uint)(parts - 11) <= 2u)
-                {
-                    if (flag)
+                case LiveCameraCharaParts.Face:
+                    for (int i = 0; i < 20; i++)
                     {
-                        tmpPos /= (float)num;
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaHeadPosition;
+                            num++;
+                        }
                     }
-                    retPos.y = tmpPos.y;
-                }
-                */
+                    break;
+
+                case LiveCameraCharaParts.Waist:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaWaistPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.LeftHandWrist:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaLeftHandWristPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.RightHandAttach:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaRightHandAttachPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.Chest:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaChestPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.Foot:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaFootPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.ConstFaceHeight:
+                case LiveCameraCharaParts.InitFaceHeight:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaConstHeightHeadPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.ConstWaistHeight:
+                case LiveCameraCharaParts.InitWaistHeight:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaConstHeightWaistPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.ConstChestHeight:
+                case LiveCameraCharaParts.InitChestHeight:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaConstHeightChestPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.RightHandWrist:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaRightHandWristPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.LeftHandAttach:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaLeftHandAttachPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.Position:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.PositionWithoutOffset:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaPosition - liveCharactorLocators[i].liveCharaFormationHeightRateOffset;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.InitialHeightFace:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaInitialHeightHeadPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.InitialHeightChest:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaInitialHeightChestPosition;
+                            num++;
+                        }
+                    }
+                    break;
+
+                case LiveCameraCharaParts.InitialHeightWaist:
+                    for (int i = 0; i < 20; i++)
+                    {
+                        if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                        {
+                            retPos += liveCharactorLocators[i].liveCharaInitialHeightWaistPosition;
+                            num++;
+                        }
+                    }
+                    break;
             }
+
+            if (num > 1)
+            {
+                retPos /= (float)num;
+            }
+
             return retPos;
         }
 
+        /// <summary>
+        /// 兼容旧版调用的重载
+        /// </summary>
         public Vector3 GetPositionWithCharacters(LiveCharaPositionFlag posFlags, LiveCameraCharaParts parts, Vector3 charaPos)
         {
-            return GetPositionWithCharacters(posFlags, parts, charaPos, _cameraLayerOffset);
+            return GetPositionWithCharacters(posFlags, parts);
+        }
+
+        /// <summary>
+        /// 兼容旧版调用的重载
+        /// </summary>
+        public Vector3 GetPositionWithCharacters(LiveCharaPositionFlag posFlags, LiveCameraCharaParts parts, Vector3 charaPos, Vector3 cameraOffset)
+        {
+            return GetPositionWithCharacters(posFlags, parts);
+        }
+
+        /// <summary>
+        /// 获取目标角色的平均身高缩放比率
+        /// </summary>
+        public float GetHeightRateWithCharacters(LiveCharaPositionFlag posFlags)
+        {
+            float heightRate = 1f;
+            if ((int)posFlags > 0)
+            {
+                int count = 0;
+                heightRate = 0f;
+                for (int i = 0; i < 20; i++)
+                {
+                    if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length && liveCharactorLocators[i] != null)
+                    {
+                        heightRate += liveCharactorLocators[i].liveCharaHeightRatio;
+                        count++;
+                    }
+                }
+                if (count > 1)
+                {
+                    heightRate /= (float)count;
+                }
+            }
+            return heightRate;
+        }
+
+        /// <summary>
+        /// 静态入口：获取相机层级高度修正偏移
+        /// </summary>
+        public static bool GetCameraLayerOffset(LiveTimelineControl timelineControl, LiveCharaPositionFlag posFlag, Vector3 layerOffsetMin, Vector3 layerOffsetDiff, out Vector3 offset)
+        {
+            if (timelineControl == null)
+            {
+                offset = Vector3.zero;
+                return false;
+            }
+            return timelineControl.GetCameraLayerOffset(posFlag, layerOffsetMin, layerOffsetDiff, out offset);
+        }
+
+        /// <summary>
+        /// 实例方法：根据角色平均身高相对基准身高的差值计算相机局部空间层级偏移
+        /// </summary>
+        public bool GetCameraLayerOffset(LiveCharaPositionFlag posFlag, Vector3 layerOffsetMin, Vector3 layerOffsetDiff, out Vector3 offset)
+        {
+            offset = Vector3.zero;
+            float height = GetHeightValueWithCharacters(posFlag);
+            if (height <= 0f)
+            {
+                return false;
+            }
+
+            float rate = (height - BaseCharaHeightMin) / BaseCharaHeightDiff;
+            offset = layerOffsetMin + layerOffsetDiff * rate;
+            return true;
+        }
+
+        /// <summary>
+        /// 计算指定站位角色的平均身高绝对值（单位：cm）
+        /// </summary>
+        public float GetHeightValueWithCharacters(LiveCharaPositionFlag posFlags)
+        {
+            float heightValue = 1f;
+            if ((int)posFlags > 0)
+            {
+                int count = 0;
+                heightValue = 0f;
+                for (int i = 0; i < 20; i++)
+                {
+                    if (posFlags.hasFlag(i) && i < liveCharactorLocators.Length)
+                    {
+                        ILiveTimelineCharactorLocator locator = liveCharactorLocators[i];
+                        if (locator != null)
+                        {
+                            heightValue += locator.liveCharaHeightValue;
+                            count++;
+                        }
+                    }
+                }
+                if (count > 1)
+                {
+                    heightValue /= count;
+                }
+            }
+            return heightValue;
         }
 
         public static float CalculateInterpolationValue(LiveTimelineKey curKey, LiveTimelineKeyWithInterpolate nextKey, float frame)
@@ -359,6 +397,9 @@ namespace Gallop.Live.Cutt
             }
         }
 
+        /// <summary>
+        /// 调度相机切换事件，通知主相机更新当前活动机位
+        /// </summary>
         private void AlterUpdate_CameraSwitcher(LiveTimelineWorkSheet sheet, float currentFrame)
         {
             if (sheet.cameraSwitcherKeys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !sheet.cameraSwitcherKeys.EnablePlayModeTimeline(_playMode))
@@ -372,41 +413,55 @@ namespace Gallop.Live.Cutt
                 return;
             }
             LiveTimelineKeyCameraSwitcherData liveTimelineKeyCameraSwitcherData = curKey as LiveTimelineKeyCameraSwitcherData;
+            if (liveTimelineKeyCameraSwitcherData == null)
+            {
+                return;
+            }
+
+            int cameraIndex = liveTimelineKeyCameraSwitcherData.cameraIndex;
             if (this.OnUpdateCameraSwitcher != null)
             {
-                this.OnUpdateCameraSwitcher(liveTimelineKeyCameraSwitcherData.cameraIndex);
+                this.OnUpdateCameraSwitcher(cameraIndex);
             }
             else
             {
-                if (liveTimelineKeyCameraSwitcherData.cameraIndex >= cameraArray.Length)
+                if (cameraIndex >= cameraArray.Length)
                 {
                     return;
                 }
                 for (int i = 0; i < cameraArray.Length; i++)
                 {
-                    if (cameraArray[i] == null)
-                    {
-                        continue;
-                    }
-                    if (i == liveTimelineKeyCameraSwitcherData.cameraIndex)
+                    if (cameraArray[i] == null) continue;
+                    if (i == cameraIndex)
                     {
                         if (!cameraArray[i].camera.enabled)
                         {
                             cameraArray[i].camera.enabled = true;
-                            cameraScriptArray[i].enabled = true;
+                            if (cameraScriptArray[i] != null)
+                            {
+                                cameraScriptArray[i].enabled = true;
+                            }
                         }
                     }
                     else if (cameraArray[i].camera.enabled)
                     {
                         cameraArray[i].camera.enabled = false;
-                        cameraScriptArray[i].enabled = false;
+                        if (cameraScriptArray[i] != null)
+                        {
+                            cameraScriptArray[i].enabled = false;
+                        }
                     }
                 }
             }
         }
 
+        /// <summary>
+        /// 更新相机位置，并提取当前关键帧的层级局部偏移
+        /// </summary>
         private void AlterUpdate_CameraPos(LiveTimelineWorkSheet sheet, float currentFrame)
         {
+            _cameraPosLayerOffset = Vector3.zero;
+
             if (sheet.cameraPosKeys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !sheet.cameraPosKeys.EnablePlayModeTimeline(_playMode))
             {
                 return;
@@ -426,28 +481,23 @@ namespace Gallop.Live.Cutt
                 return;
             }
             LiveTimelineKeyCameraPositionData liveTimelineKeyCameraPositionData = curKey as LiveTimelineKeyCameraPositionData;
+            if (liveTimelineKeyCameraPositionData == null)
+            {
+                return;
+            }
+
             camera.camera.nearClipPlane = liveTimelineKeyCameraPositionData.nearClip;
             camera.camera.farClipPlane = liveTimelineKeyCameraPositionData.farClip;
+
             if (CalculateCameraPos(out var pos, sheet, curKey, nextKey, currentFrame))
             {
                 camera.cacheTransform.position = pos;
 
-                // TODO �����õĻ���CGSS��layerö�٣�Ҫ�����滻
-                /*
-                int num = liveTimelineKeyCameraPositionData.GetCullingMask();
-                if (num == 0)
+                if (liveTimelineKeyCameraPositionData.GetLayerOffset(this, out Vector3 layerOffset))
                 {
-                    num = LiveTimelineKeyCameraPositionData.GetDefaultCullingMask();
+                    _cameraPosLayerOffset = layerOffset;
                 }
-                camera.camera.cullingMask = num;
-                if (OnUpdateCameraPos != null)
-                {
-                    CameraPosUpdateInfo updateInfo = default(CameraPosUpdateInfo);
-                    updateInfo.outlineZOffset = liveTimelineKeyCameraPositionData.outlineZOffset;
-                    updateInfo.characterLODMask = (int)liveTimelineKeyCameraPositionData.characterLODMask;
-                    OnUpdateCameraPos(ref updateInfo);
-                }
-                */
+                _currentCameraPosKeyFrame = liveTimelineKeyCameraPositionData.frame;
             }
         }
 
@@ -512,19 +562,20 @@ namespace Gallop.Live.Cutt
                 int bezierPointCount = liveTimelineKeyCameraPositionData2.GetBezierPointCount();
                 if (bezierPointCount == 0)
                 {
-                    pos = LerpWithoutClamp(getFunc(liveTimelineKeyCameraPositionData, this, config), getFunc(liveTimelineKeyCameraPositionData2, this, config), t);
+                    pos = LerpWithoutClamp(liveTimelineKeyCameraPositionData.GetValue(this), liveTimelineKeyCameraPositionData2.GetValue(this), t);
                 }
                 else
                 {
-                    BezierCalcWork.cameraPos.Set(getFunc(liveTimelineKeyCameraPositionData, this, config), getFunc(liveTimelineKeyCameraPositionData2, this, config), bezierPointCount);
+                    BezierCalcWork.cameraPos.Set(liveTimelineKeyCameraPositionData.GetValue(this), liveTimelineKeyCameraPositionData2.GetValue(this), bezierPointCount);
                     BezierCalcWork.cameraPos.UpdatePoints(liveTimelineKeyCameraPositionData2, this);
                     BezierCalcWork.cameraPos.Calc(bezierPointCount, t, out pos);
                 }
             }
             else
             {
-                pos = getFunc(liveTimelineKeyCameraPositionData, this, config);
+                pos = liveTimelineKeyCameraPositionData.GetValue(this);
             }
+
             if (_isNowAlterUpdate && liveTimelineKeyCameraPositionData.attribute.hasFlag(LiveTimelineKeyAttribute.CameraDelayEnable) && (_oldFrame >= liveTimelineKeyCameraPositionData.frame || currentFrame < liveTimelineKeyCameraPositionData.frame || liveTimelineKeyCameraPositionData.attribute.hasFlag(LiveTimelineKeyAttribute.CameraDelayInherit)))
             {
                 if (targetCamera == null)
@@ -537,8 +588,13 @@ namespace Gallop.Live.Cutt
             return true;
         }
 
+        /// <summary>
+        /// 更新相机注视点（LookAt），并提取当前关键帧的层级局部偏移
+        /// </summary>
         private void AlterUpdate_CameraLookAt(LiveTimelineWorkSheet sheet, float currentFrame, ref Vector3 outLookAt)
         {
+            _cameraLookAtLayerOffset = Vector3.zero;
+
             if (!sheet.cameraLookAtKeys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) && sheet.cameraLookAtKeys.EnablePlayModeTimeline(_playMode))
             {
                 CacheCamera camera = GetCamera(sheet.targetCameraIndex);
@@ -546,13 +602,24 @@ namespace Gallop.Live.Cutt
                 {
                     camera.cacheTransform.LookAt(lookAtPos, Vector3.up);
                     outLookAt = lookAtPos;
+
+                    LiveTimelineKey curKey = null;
+                    FindTimelineKeyCurrent(out curKey, sheet.cameraLookAtKeys, currentFrame);
+                    if (curKey is LiveTimelineKeyCameraLookAtData currentLookAtKey)
+                    {
+                        if (currentLookAtKey.GetLayerOffset(this, out Vector3 layerOffset))
+                        {
+                            _cameraLookAtLayerOffset = layerOffset;
+                        }
+                        _currentCameraLookAtKeyFrame = curKey.frame;
+                    }
                 }
             }
         }
 
         private static Vector3 GetCameraLookAtValue(LiveTimelineKeyCameraLookAtData keyData, LiveTimelineControl timelineControl, Vector3 camPos, FindTimelineConfig config)
         {
-            return keyData.GetValue(timelineControl, camPos);
+            return keyData.GetValue(timelineControl);
         }
 
         public bool CalculateCameraLookAt(out Vector3 lookAtPos, LiveTimelineWorkSheet sheet, float currentFrame)
@@ -568,7 +635,14 @@ namespace Gallop.Live.Cutt
             return CalculateCameraLookAt(out lookAtPos, sheet, currentFrame, camera, ref config, ref fnGetCameraLookAtValue, ref fnGetCameraPosValue);
         }
 
-        private bool CalculateCameraLookAt(out Vector3 lookAtPos, LiveTimelineWorkSheet sheet, float currentFrame, CacheCamera targetCamera, ref FindTimelineConfig config, ref Func<LiveTimelineKeyCameraLookAtData, LiveTimelineControl, Vector3, FindTimelineConfig, Vector3> getLookAtValueFunc, ref Func<LiveTimelineKeyCameraPositionData, LiveTimelineControl, FindTimelineConfig, Vector3> getPosValueFunc)
+        private bool CalculateCameraLookAt(
+            out Vector3 lookAtPos,
+            LiveTimelineWorkSheet sheet,
+            float currentFrame,
+            CacheCamera targetCamera,
+            ref FindTimelineConfig config,
+            ref Func<LiveTimelineKeyCameraLookAtData, LiveTimelineControl, Vector3, FindTimelineConfig, Vector3> getLookAtValueFunc,
+            ref Func<LiveTimelineKeyCameraPositionData, LiveTimelineControl, FindTimelineConfig, Vector3> getPosValueFunc)
         {
             lookAtPos = Vector3.zero;
             CacheCamera camera = GetCamera(sheet.targetCameraIndex);
@@ -583,61 +657,59 @@ namespace Gallop.Live.Cutt
             {
                 return false;
             }
-            Vector3 position = camera.cacheTransform.position;
             LiveTimelineKeyCameraLookAtData liveTimelineKeyCameraLookAtData = curKey as LiveTimelineKeyCameraLookAtData;
             LiveTimelineKeyCameraLookAtData liveTimelineKeyCameraLookAtData2 = nextKey as LiveTimelineKeyCameraLookAtData;
+            if (liveTimelineKeyCameraLookAtData == null)
+            {
+                return false;
+            }
+
+            Vector3 position = camera.cacheTransform.position;
+
             if (liveTimelineKeyCameraLookAtData2 != null && liveTimelineKeyCameraLookAtData2.interpolateType != 0)
             {
                 float t = CalculateInterpolationValue(liveTimelineKeyCameraLookAtData, liveTimelineKeyCameraLookAtData2, currentFrame);
+                Vector3 start = liveTimelineKeyCameraLookAtData.GetValue(this);
+                Vector3 end = liveTimelineKeyCameraLookAtData2.GetValue(this);
                 int bezierPointCount = liveTimelineKeyCameraLookAtData2.GetBezierPointCount();
+
                 if (bezierPointCount == 0)
                 {
-                    lookAtPos = LerpWithoutClamp(getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config), getLookAtValueFunc(liveTimelineKeyCameraLookAtData2, this, position, config), t);
+                    lookAtPos = LerpWithoutClamp(start, end, t);
                 }
                 else if (liveTimelineKeyCameraLookAtData2.necessaryToUseNewBezierCalcMethod)
                 {
-                    Vector3 zero = Vector3.zero;
-                    BezierCalcWork.cameraLookAt.Set(getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config), getLookAtValueFunc(liveTimelineKeyCameraLookAtData2, this, zero, config), bezierPointCount);
-                    BezierCalcWork.cameraLookAt.UpdatePoints(liveTimelineKeyCameraLookAtData2, this, zero);
+                    BezierCalcWork.cameraLookAt.Set(start, end, bezierPointCount);
+                    BezierCalcWork.cameraLookAt.UpdatePoints(liveTimelineKeyCameraLookAtData2, this, Vector3.zero);
                     BezierCalcWork.cameraLookAt.Calc(bezierPointCount, t, out lookAtPos);
                 }
                 else
                 {
-                    Vector3 zero2 = Vector3.zero;
-                    Vector3 end = getLookAtValueFunc(liveTimelineKeyCameraLookAtData2, this, zero2, config);
-                    Vector3 cp = liveTimelineKeyCameraLookAtData2.GetBezierPoint(0, this, zero2);
-                    Vector3 cp2 = liveTimelineKeyCameraLookAtData2.GetBezierPoint(1, this, zero2);
-                    Vector3 cp3 = liveTimelineKeyCameraLookAtData2.GetBezierPoint(2, this, zero2);
-                    switch (liveTimelineKeyCameraLookAtData2.GetBezierPointCount())
+                    Vector3 cp = liveTimelineKeyCameraLookAtData2.GetBezierPoint(0, this);
+                    Vector3 cp2 = liveTimelineKeyCameraLookAtData2.GetBezierPoint(1, this);
+                    Vector3 cp3 = liveTimelineKeyCameraLookAtData2.GetBezierPoint(2, this);
+                    switch (bezierPointCount)
                     {
                         default:
-                            lookAtPos = LerpWithoutClamp(getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config), getLookAtValueFunc(liveTimelineKeyCameraLookAtData2, this, position, config), t);
+                            lookAtPos = LerpWithoutClamp(start, end, t);
                             break;
                         case 1:
-                            {
-                                Vector3 start3 = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
-                                BezierUtil.Calc(ref start3, ref end, ref cp, t, out lookAtPos);
-                                break;
-                            }
+                            BezierUtil.Calc(ref start, ref end, ref cp, t, out lookAtPos);
+                            break;
                         case 2:
-                            {
-                                Vector3 start2 = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
-                                BezierUtil.Calc(ref start2, ref end, ref cp, ref cp2, t, out lookAtPos);
-                                break;
-                            }
+                            BezierUtil.Calc(ref start, ref end, ref cp, ref cp2, t, out lookAtPos);
+                            break;
                         case 3:
-                            {
-                                Vector3 start = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
-                                BezierUtil.Calc(ref start, ref end, ref cp, ref cp2, ref cp3, t, out lookAtPos);
-                                break;
-                            }
+                            BezierUtil.Calc(ref start, ref end, ref cp, ref cp2, ref cp3, t, out lookAtPos);
+                            break;
                     }
                 }
             }
             else
             {
-                lookAtPos = getLookAtValueFunc(liveTimelineKeyCameraLookAtData, this, position, config);
+                lookAtPos = liveTimelineKeyCameraLookAtData.GetValue(this);
             }
+
             if (_isNowAlterUpdate && liveTimelineKeyCameraLookAtData.attribute.hasFlag(LiveTimelineKeyAttribute.CameraDelayEnable) && (_oldFrame >= liveTimelineKeyCameraLookAtData.frame || currentFrame < liveTimelineKeyCameraLookAtData.frame || liveTimelineKeyCameraLookAtData.attribute.hasFlag(LiveTimelineKeyAttribute.CameraDelayInherit)))
             {
                 Vector3 b = lookAtPos - camera.cacheTransform.position;
@@ -726,11 +798,9 @@ namespace Gallop.Live.Cutt
             }
         }
 
-        //public void SetMultiCamera(MultiCameraManager manager, MultiCamera[] multiCamera)
         public void SetMultiCamera(MultiCamera[] multiCamera)
         {
             _multiCamera = multiCamera;
-            //_multiCameraManager = manager;
             if (multiCamera != null)
             {
                 _multiCameraCache = new CacheCamera[multiCamera.Length];
@@ -742,4 +812,3 @@ namespace Gallop.Live.Cutt
         }
     }
 }
-
